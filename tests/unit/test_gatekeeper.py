@@ -60,6 +60,7 @@ class TestHeavyJobGuard:
             check("no_such_job", "cpu")
 
     def test_heavy_job_registry_matches_claude_md(self) -> None:
-        assert gatekeeper.HEAVY_JOBS == frozenset(
+        expected = frozenset(
             {"feature_extraction", "rolled_out_sweep", "stage3_training", "fine_tuning"}
         )
+        assert expected == gatekeeper.HEAVY_JOBS
