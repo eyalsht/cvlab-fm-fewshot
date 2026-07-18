@@ -36,6 +36,16 @@ class TestFeaturesCli:
         npz = data_root / "features" / "mini_imagenet_stub" / "test.npz"
         assert npz.exists()
 
+    def test_heavy_refusal_exits_with_message_not_traceback(
+        self, data_root: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import torch
+
+        monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+        argv = [a for a in features_argv(data_root) if a != "--allow-heavy-on-cpu"]
+        with pytest.raises(SystemExit, match="GPU box"):
+            main(argv)
+
     def test_repeat_invocation_is_a_noop(self, data_root: Path) -> None:
         main(features_argv(data_root))
         npz = data_root / "features" / "mini_imagenet_stub" / "test.npz"
