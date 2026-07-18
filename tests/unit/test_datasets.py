@@ -97,6 +97,19 @@ class TestMiniImagenet:
             load_split("mini_imagenet", "val", tmp_path)
 
 
+@pytest.mark.slow
+class TestMiniImagenetReal:
+    """Runs against the manually acquired dataset; skips until it exists."""
+
+    def test_real_test_split_has_20_classes(self) -> None:
+        try:
+            split = load_split("mini_imagenet", "test", Path("data/raw"))
+        except DatasetMissingError:
+            pytest.skip("Mini-ImageNet not acquired; see README")
+        assert len(split.class_names) == 20
+        assert len(split.labels) == len(split.images)
+
+
 class TestValidation:
     def test_unknown_dataset_raises(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="no_such_dataset"):

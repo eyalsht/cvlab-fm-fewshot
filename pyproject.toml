@@ -48,6 +48,9 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "--cov=fm_fewshot --cov-report=term-missing"
+markers = [
+    "slow: needs manually acquired data or long runtimes; skips or runs out of the default gate",
+]
 
 [tool.coverage.run]
 source = ["fm_fewshot"]
