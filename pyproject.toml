@@ -5,7 +5,24 @@ description = "Flow matching as a layer: few-shot classification over frozen enc
 readme = "README.md"
 authors = [{ name = "Eyal Shtinmetz", email = "eyalshtinmetz@gmail.com" }]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "numpy>=2.1",
+    "pyyaml>=6.0",
+    "torch>=2.7",
+    "torchvision>=0.22",
+]
+
+# Platform-resolved torch (PLAN, Technology): the CPU-only laptop is Windows and
+# pulls the CPU wheel from the PyTorch index; the Linux GPU box falls through to
+# PyPI, whose default Linux wheels bundle CUDA. One lockfile serves both.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'win32'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'win32'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = [
