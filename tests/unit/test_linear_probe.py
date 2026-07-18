@@ -88,7 +88,9 @@ class TestRegularization:
         support_y = torch.arange(5).repeat_interleave(2)
         episode = make_episode(5, k_shot=2)
         norms = [
-            fit_head(make_cfg(5, weight_decay=wd), episode, support_x, support_y).weight.norm().item()
+            fit_head(make_cfg(5, weight_decay=wd), episode, support_x, support_y)
+            .weight.norm()
+            .item()
             for wd in (0.0, 1e-2, 1.0)
         ]
         assert norms[0] >= norms[1] >= norms[2]
