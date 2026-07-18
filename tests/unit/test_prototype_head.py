@@ -6,7 +6,7 @@ import torch
 import torch.nn.functional as F  # noqa: N812
 from test_head_contract import run_head_battery, separable_scenario
 
-from fm_fewshot.services.heads.base import make_head
+from fm_fewshot.services.heads.base import NotFittedError, make_head
 from fm_fewshot.services.heads.prototype import PrototypeHead
 from fm_fewshot.shared.contracts import Episode, ExperimentConfig
 
@@ -175,8 +175,6 @@ class TestDeterminism:
 
 class TestValidation:
     def test_predict_before_fit_raises(self) -> None:
-        from fm_fewshot.services.heads.base import NotFittedError
-
         head = make_head(make_cfg(3, metric="cosine"), make_episode(3))
         with pytest.raises(NotFittedError):
             head.predict(torch.zeros(2, 4))
@@ -201,3 +199,15 @@ class TestValidation:
         head = make_head(make_cfg(2, metric="manhattan"), make_episode(2))
         with pytest.raises(ValueError, match="metric"):
             head.fit(support_x, support_y)
+
+    def test_non_finite_support_raises(self) -> None:
+        support_x = torch.tensor([[0.0, 1.0], [float("nan"), 3.0], [4.0, 0.0], [6.0, 0.0]])
+        support_y = torch.tensor([0, 0, 1, 1])
+        head = make_head(make_cfg(2, metric="cosine"), make_episode(2, k_shot=2))
+        with pytest.raises(ValueError, match="finite"):
+            head.fit(support_x, support_y)
+
+    def test_prototypes_property_before_fit_raises(self) -> None:
+        head = make_head(make_cfg(2), make_episode(2))
+        with pytest.raises(NotFittedError):
+            _ = head.prototypes
