@@ -1,0 +1,31 @@
+# local tooling
+/CLAUDE.md
+.claude/
+.cursor/
+
+# planning workspace (separate private repository mounted here)
+/docs/
+
+# course material and local media
+/references/
+/vid2*
+*.mp4
+*.wav
+
+# data and experiment artifacts (repo root only; src packages are unaffected)
+/data/
+/results/
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+*.egg-info/
+
+# local environment
+.env
