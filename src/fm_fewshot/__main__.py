@@ -8,6 +8,7 @@ import argparse
 from pathlib import Path
 
 from fm_fewshot import sdk
+from fm_fewshot.shared.gatekeeper import HeavyJobOnCpuError
 
 
 def _features_parser(subparsers) -> None:  # noqa: ANN001
@@ -30,15 +31,18 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     if args.command == "features":
-        path = sdk.build_features(
-            args.dataset,
-            args.split,
-            encoder=args.encoder,
-            data_root=args.data_root,
-            batch_size=args.batch_size,
-            device=args.device,
-            allow_heavy_on_cpu=args.allow_heavy_on_cpu,
-        )
+        try:
+            path = sdk.build_features(
+                args.dataset,
+                args.split,
+                encoder=args.encoder,
+                data_root=args.data_root,
+                batch_size=args.batch_size,
+                device=args.device,
+                allow_heavy_on_cpu=args.allow_heavy_on_cpu,
+            )
+        except HeavyJobOnCpuError as error:
+            raise SystemExit(str(error)) from error
         print(path)
     else:
         raise SystemExit(f"{args.command} is not implemented yet")
