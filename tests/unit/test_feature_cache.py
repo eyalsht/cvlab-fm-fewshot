@@ -99,6 +99,25 @@ class TestCorruption:
             read_features("mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False)
 
 
+class TestModelConfigInvalidation:
+    def test_meta_records_the_model_name(self, data_root: Path) -> None:
+        build(data_root, StubEncoder())
+        _, _, meta = read_features(
+            "mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False
+        )
+        assert meta["model_name"] == StubEncoder.model_name
+
+    def test_changed_model_name_invalidates_idempotence(self, data_root: Path) -> None:
+        # Regression for the 2026-07-19 contamination: caches built under one
+        # model config were accepted as up to date by a build under another,
+        # because the idempotence key ignored the model config.
+        build(data_root, StubEncoder())
+        changed = StubEncoder()
+        changed.model_name = "stub-v2"
+        build(data_root, changed)
+        assert changed.batch_calls > 0
+
+
 class TestClipWrapperConfig:
     def test_openai_weights_load_the_quickgelu_config(self) -> None:
         # The openai CLIP weights were trained with QuickGELU. open_clip's
