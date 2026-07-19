@@ -39,11 +39,16 @@ class StubEncoder:
 class ClipVitB32Encoder:
     """open_clip ViT-B-32 image tower, openai weights, loaded lazily.
 
-    Weight download happens once per machine on first use. Untested by the
-    unit suite (needs the download); exercised when real caches are built.
+    The openai weights were trained with QuickGELU, so the model config must
+    be the -quickgelu variant; the plain ViT-B-32 config silently computes
+    wrong features under open_clip 3.x, which only warns on the mismatch.
+    Weight download happens once per machine on first use. The forward path
+    is untested by the unit suite (needs the download); it is exercised when
+    real caches are built.
     """
 
     name = "clip_vit_b32"
+    model_name = "ViT-B-32-quickgelu"
     weights_tag = "openai"
 
     def __init__(self) -> None:
@@ -55,7 +60,7 @@ class ClipVitB32Encoder:
         import open_clip
 
         model, _, preprocess = open_clip.create_model_and_transforms(
-            "ViT-B-32", pretrained="openai"
+            self.model_name, pretrained=self.weights_tag
         )
         self._model = model.eval().to(device)
         self._preprocess = preprocess
