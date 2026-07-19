@@ -20,6 +20,7 @@ class StubEncoder:
     """
 
     name = "stub"
+    model_name = "stub"
     weights_tag = "stub"
 
     def __init__(self) -> None:

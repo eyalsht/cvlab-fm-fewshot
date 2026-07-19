@@ -38,7 +38,7 @@ def _sha256(path: Path) -> str:
 def build_features(
     dataset: str,
     split: str,
-    encoder,  # noqa: ANN001 - duck-typed: name, weights_tag, dim, encode_images
+    encoder,  # noqa: ANN001 - duck-typed: name, model_name, weights_tag, dim, encode_images
     *,
     data_root: Path,
     batch_size: int = 256,
@@ -48,9 +48,11 @@ def build_features(
     npz_path, meta_path = _paths(data_root, dataset, encoder.name, split)
     if npz_path.exists() and meta_path.exists():
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
-        keys = ("dataset", "split", "encoder", "weights_tag")
+        keys = ("dataset", "split", "encoder", "model_name", "weights_tag")
         if all(meta.get(k) == v for k, v in zip(
-            keys, (dataset, split, encoder.name, encoder.weights_tag), strict=True
+            keys,
+            (dataset, split, encoder.name, encoder.model_name, encoder.weights_tag),
+            strict=True,
         )):
             return npz_path
 
@@ -78,6 +80,7 @@ def build_features(
         "dataset": dataset,
         "split": split,
         "encoder": encoder.name,
+        "model_name": encoder.model_name,
         "weights_tag": encoder.weights_tag,
         "N": n,
         "D": d,
