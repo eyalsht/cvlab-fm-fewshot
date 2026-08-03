@@ -1,7 +1,6 @@
-"""Command-line dispatch: run | features | sweep | report.
+"""Command-line dispatch: features | run | sweep | report.
 
-Thin argument parsing only; behavior lives behind the sdk. run, sweep, and
-report arrive with the evaluation harness.
+Thin argument parsing only; behavior lives behind the sdk.
 """
 
 import argparse
@@ -22,12 +21,39 @@ def _features_parser(subparsers) -> None:  # noqa: ANN001
     p.add_argument("--allow-heavy-on-cpu", action="store_true")
 
 
+def _run_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser("run", help="run one experiment from a config file")
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+
+
+def _sweep_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser("sweep", help="run every cell of a grid config")
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument("--dry-run", action="store_true", help="list the runs and exit")
+
+
+def _report_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser("report", help="regenerate results/TABLE.md")
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument("--table", type=Path, default=None)
+    p.add_argument(
+        "--allow-incomplete",
+        action="store_true",
+        help="report cells holding fewer runs than the protocol requires",
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fm_fewshot")
     subparsers = parser.add_subparsers(dest="command", required=True)
     _features_parser(subparsers)
-    for name in ("run", "sweep", "report"):
-        subparsers.add_parser(name, help="arrives with the evaluation harness")
+    _run_parser(subparsers)
+    _sweep_parser(subparsers)
+    _report_parser(subparsers)
     args = parser.parse_args(argv)
 
     if args.command == "features":
@@ -44,8 +70,44 @@ def main(argv: list[str] | None = None) -> None:
         except HeavyJobOnCpuError as error:
             raise SystemExit(str(error)) from error
         print(path)
-    else:
-        raise SystemExit(f"{args.command} is not implemented yet")
+
+    elif args.command == "run":
+        from fm_fewshot.shared.config import load_config
+
+        summary = sdk.run_experiment(
+            load_config(args.config),
+            data_root=args.data_root,
+            results_dir=args.results_dir,
+        )
+        print(f"{summary.run_id} top1={summary.test_top1:.4f}")
+
+    elif args.command == "sweep":
+        from fm_fewshot.services.evaluation.sweep import load_grid
+
+        configs = load_grid(args.config)
+        if args.dry_run:
+            for cfg in configs:
+                print(cfg.run_name)
+            print(f"{len(configs)} runs")
+            return
+        sdk.run_sweep(
+            configs,
+            data_root=args.data_root,
+            results_dir=args.results_dir,
+            progress=True,
+        )
+
+    elif args.command == "report":
+        from fm_fewshot.services.evaluation.report import IncompleteCellError, write_table
+
+        table = args.table or args.results_dir / "TABLE.md"
+        try:
+            path = write_table(
+                args.results_dir, table, require_complete=not args.allow_incomplete
+            )
+        except IncompleteCellError as error:
+            raise SystemExit(str(error)) from error
+        print(path)
 
 
 if __name__ == "__main__":

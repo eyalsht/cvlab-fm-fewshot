@@ -6,10 +6,11 @@ The only import surface for notebooks and the CLI.
 from pathlib import Path
 
 from fm_fewshot.services.evaluation.loop import run_experiment
+from fm_fewshot.services.evaluation.sweep import run_sweep
 from fm_fewshot.services.features import cache
 from fm_fewshot.services.features.encoders import load_encoder
 
-__all__ = ["build_features", "run_experiment"]
+__all__ = ["build_features", "run_experiment", "run_sweep"]
 
 
 def build_features(

@@ -1,0 +1,37 @@
+# Stage 1 grid, expanded by services/evaluation/sweep.py.
+#
+# The seed count per cell is not written here: it comes from the protocol
+# (report.expected_runs), so a sweep cannot silently omit a seed.
+#
+# encoders maps each encoder to the datasets it runs on. The write-up puts
+# ResNet-18 on both selected datasets and DINOv2 ViT-S/14 on one of the group's
+# choice. That choice was made from the ResNet-18 numbers: it goes on
+# FGVC-Aircraft, where ResNet-18 is weakest (0.368 full against 0.626 on DTD),
+# so the encoder comparison carries the most information.
+
+datasets:
+  - dtd
+  - fgvc_aircraft
+
+encoders:
+  resnet18:
+    - dtd
+    - fgvc_aircraft
+  dinov2_vits14:
+    - fgvc_aircraft
+
+heads:
+  - prototype
+  - linear_probe
+
+ks:
+  - 5
+  - 10
+  - full
+
+head_params:
+  linear_probe:
+    lr: 1.0e-3
+    weight_decay: 1.0e-4
+    batch_size: 64
+    max_epochs: 200
