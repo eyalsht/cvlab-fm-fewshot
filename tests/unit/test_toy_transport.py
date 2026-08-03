@@ -20,11 +20,17 @@ from fm_fewshot.services.flow.toy import (
     train_toy_field,
 )
 
+# Anisotropic on purpose. Isotropic blobs are already classified perfectly by
+# nearest prototype, so transport there can only fail to hurt; it cannot show
+# that the mechanism does anything. This is the geometry the Stage 1 diagnosis
+# found in real features (docs/notes/prototype_gap_diagnosis.md).
+ANISOTROPY = 5.0
+
 
 @pytest.fixture(scope="module")
 def trained() -> tuple[ToyProblem, torch.nn.Module]:
-    problem = make_toy_problem(seed=0)
-    field = train_toy_field(problem, seed=0, steps=800)
+    problem = make_toy_problem(seed=0, anisotropy=ANISOTROPY)
+    field = train_toy_field(problem, seed=0, steps=1200)
     return problem, field
 
 
@@ -57,8 +63,14 @@ class TestTransport:
         accuracy = classify_by_nearest_prototype(moved, problem.prototypes, problem.test_y)
         assert accuracy >= 0.95, accuracy
 
-    def test_transport_beats_the_untransported_baseline(self, trained) -> None:
-        """Transport must add something over classifying where the point started."""
+    def test_transport_recovers_the_anisotropy_loss(self, trained) -> None:
+        """The Stage 2 hypothesis in miniature.
+
+        Nearest prototype loses accuracy on stretched classes. If an
+        unconditional flow toward prototypes can recover that loss here, the
+        mechanism is at least capable of learning what the Stage 1 diagnosis
+        says the real gap is.
+        """
         problem, field = trained
         before = classify_by_nearest_prototype(
             problem.test_x, problem.prototypes, problem.test_y
@@ -66,7 +78,16 @@ class TestTransport:
         with torch.no_grad():
             moved = solve_ode(field, problem.test_x, n_steps=8, method="euler")
         after = classify_by_nearest_prototype(moved, problem.prototypes, problem.test_y)
-        assert after >= before
+        assert before < 0.95, f"toy is too easy to be informative: {before}"
+        assert after > before + 0.05, (before, after)
+
+    def test_isotropic_problem_has_nothing_to_recover(self) -> None:
+        """Control: with round classes the centroid rule is already optimal."""
+        problem = make_toy_problem(seed=0, anisotropy=1.0)
+        before = classify_by_nearest_prototype(
+            problem.test_x, problem.prototypes, problem.test_y
+        )
+        assert before > 0.99
 
     def test_points_end_up_near_their_prototype(self, trained) -> None:
         problem, field = trained
@@ -93,7 +114,7 @@ class TestTransport:
 
 class TestDeterminism:
     def test_two_trainings_at_one_seed_are_bit_identical(self) -> None:
-        problem = make_toy_problem(seed=0)
+        problem = make_toy_problem(seed=0, anisotropy=ANISOTROPY)
         a = train_toy_field(problem, seed=0, steps=50)
         b = train_toy_field(problem, seed=0, steps=50)
         with torch.no_grad():
@@ -101,7 +122,7 @@ class TestDeterminism:
                                b(problem.test_x, torch.zeros(len(problem.test_x))))
 
     def test_training_reduces_the_objective(self) -> None:
-        problem = make_toy_problem(seed=0)
+        problem = make_toy_problem(seed=0, anisotropy=ANISOTROPY)
         field = train_toy_field(problem, seed=0, steps=400)
         x0 = problem.train_x
         x1 = problem.prototypes[problem.train_y]
