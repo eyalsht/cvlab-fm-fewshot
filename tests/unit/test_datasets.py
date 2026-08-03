@@ -1,4 +1,10 @@
-"""Dataset loader tests on synthetic fixtures; no network, no real downloads."""
+"""Dataset loader tests: DTD and FGVC-Aircraft at their official splits.
+
+No test downloads anything. The torchvision constructors sit behind a registry
+the tests replace with a stub, which also lets them assert that the two
+protocol-critical arguments (DTD partition 1, Aircraft variant level) actually
+reach torchvision.
+"""
 
 from pathlib import Path
 
@@ -6,115 +12,146 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from fm_fewshot.services.data import datasets as datasets_module
-from fm_fewshot.services.data.datasets import DatasetMissingError, load_split
+from fm_fewshot.services.data import datasets as ds
+
+SPLITS = ("train", "val", "test")
 
 
 class StubTorchvisionDataset:
-    """Stands in for torchvision MNIST/CIFAR10: classes, targets, indexable images."""
+    """Mimics DTD and FGVCAircraft: private _labels, public classes, no targets."""
 
-    classes = ["0 - zero", "1 - one", "2 - two"]
+    calls: list[dict] = []
 
-    def __init__(self, root: str, train: bool, download: bool) -> None:
-        n = 6 if train else 3
-        self.targets = [i % 3 for i in range(n)]
-        self._images = [Image.new("L", (8, 8), color=i * 10) for i in range(n)]
+    def __init__(self, root, split, **kwargs):
+        type(self).calls.append({"root": root, "split": split, **kwargs})
+        self._split = split
+        # Three classes, two images each, class-blocked.
+        self.classes = ["alpha", "beta", "gamma"]
+        self._labels = [0, 0, 1, 1, 2, 2]
+        self._images = [
+            Image.new("RGB", (4, 4), color=(i, i, i)) for i in range(len(self._labels))
+        ]
 
     def __len__(self) -> int:
-        return len(self.targets)
+        return len(self._labels)
 
-    def __getitem__(self, i: int) -> tuple[Image.Image, int]:
-        return self._images[i], self.targets[i]
-
-
-@pytest.fixture
-def stub_torchvision(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setitem(datasets_module.TORCHVISION_DATASETS, "mnist", StubTorchvisionDataset)
+    def __getitem__(self, i: int):
+        return self._images[i], self._labels[i]
 
 
-@pytest.fixture
-def mini_imagenet_root(tmp_path: Path) -> Path:
-    for class_name in ("n01532829", "n01558993", "n01704323"):
-        class_dir = tmp_path / "mini_imagenet" / "test" / class_name
-        class_dir.mkdir(parents=True)
-        for j in range(4):
-            Image.new("RGB", (8, 8), color=j).save(class_dir / f"img_{j}.jpg")
-    return tmp_path
+@pytest.fixture(autouse=True)
+def stub_registry(monkeypatch: pytest.MonkeyPatch):
+    StubTorchvisionDataset.calls = []
+    specs = {
+        "dtd": ds.DatasetSpec(
+            factory=StubTorchvisionDataset,
+            kwargs={"partition": 1},
+            n_classes=3,
+        ),
+        "fgvc_aircraft": ds.DatasetSpec(
+            factory=StubTorchvisionDataset,
+            kwargs={"annotation_level": "variant"},
+            n_classes=3,
+        ),
+    }
+    monkeypatch.setattr(ds, "DATASET_SPECS", specs)
+    return specs
 
 
-class TestTorchvisionBacked:
-    def test_split_sizes_follow_train_flag(self, stub_torchvision: None, tmp_path: Path) -> None:
-        train = load_split("mnist", "train", tmp_path)
-        test = load_split("mnist", "test", tmp_path)
-        assert len(train.labels) == len(train.images) == 6
-        assert len(test.labels) == len(test.images) == 3
+class TestProtocolArguments:
+    def test_dtd_requests_official_partition_one(self, tmp_path: Path) -> None:
+        ds.load_split("dtd", "train", tmp_path)
+        assert StubTorchvisionDataset.calls[-1]["partition"] == 1
 
-    def test_labels_are_int64_in_dataset_order(self, stub_torchvision: None,
-                                               tmp_path: Path) -> None:
-        split = load_split("mnist", "train", tmp_path)
+    def test_aircraft_requests_the_variant_annotation_level(self, tmp_path: Path) -> None:
+        ds.load_split("fgvc_aircraft", "train", tmp_path)
+        assert StubTorchvisionDataset.calls[-1]["annotation_level"] == "variant"
+
+    @pytest.mark.parametrize("split", SPLITS)
+    def test_every_official_split_is_reachable(self, split: str, tmp_path: Path) -> None:
+        ds.load_split("dtd", split, tmp_path)
+        assert StubTorchvisionDataset.calls[-1]["split"] == split
+
+    def test_splits_are_never_merged(self, tmp_path: Path) -> None:
+        """No loader call may ask torchvision for a combined split."""
+        for split in SPLITS:
+            ds.load_split("fgvc_aircraft", split, tmp_path)
+        requested = {call["split"] for call in StubTorchvisionDataset.calls}
+        assert requested == set(SPLITS)
+        assert "trainval" not in requested
+
+
+class TestSplitContents:
+    def test_labels_come_from_the_private_attribute(self, tmp_path: Path) -> None:
+        """DTD and FGVCAircraft expose _labels, not the .targets of MNIST/CIFAR."""
+        split = ds.load_split("dtd", "train", tmp_path)
         assert split.labels.dtype == np.int64
-        assert split.labels.tolist() == [0, 1, 2, 0, 1, 2]
+        assert split.labels.tolist() == [0, 0, 1, 1, 2, 2]
 
-    def test_class_names_come_from_the_dataset(self, stub_torchvision: None,
-                                               tmp_path: Path) -> None:
-        split = load_split("mnist", "test", tmp_path)
-        assert split.class_names == ("0 - zero", "1 - one", "2 - two")
+    def test_class_names_are_indexed_by_global_class_id(self, tmp_path: Path) -> None:
+        split = ds.load_split("dtd", "train", tmp_path)
+        assert split.class_names == ("alpha", "beta", "gamma")
 
-    def test_item_order_is_deterministic(self, stub_torchvision: None, tmp_path: Path) -> None:
-        first = load_split("mnist", "train", tmp_path)
-        second = load_split("mnist", "train", tmp_path)
-        assert np.array_equal(first.labels, second.labels)
-        assert first.class_names == second.class_names
+    def test_item_order_is_deterministic(self, tmp_path: Path) -> None:
+        first = ds.load_split("dtd", "test", tmp_path)
+        second = ds.load_split("dtd", "test", tmp_path)
+        assert first.labels.tolist() == second.labels.tolist()
+        assert [np.asarray(im).tolist() for im in first.images] == [
+            np.asarray(im).tolist() for im in second.images
+        ]
 
-    def test_images_are_indexable_pil(self, stub_torchvision: None, tmp_path: Path) -> None:
-        split = load_split("mnist", "test", tmp_path)
-        assert isinstance(split.images[0], Image.Image)
+    def test_images_align_with_labels(self, tmp_path: Path) -> None:
+        split = ds.load_split("dtd", "train", tmp_path)
+        assert len(split.images) == split.labels.shape[0]
 
-
-class TestMiniImagenet:
-    def test_loads_sorted_classes_and_files(self, mini_imagenet_root: Path) -> None:
-        split = load_split("mini_imagenet", "test", mini_imagenet_root)
-        assert split.class_names == ("n01532829", "n01558993", "n01704323")
-        assert split.labels.dtype == np.int64
-        assert split.labels.tolist() == [0] * 4 + [1] * 4 + [2] * 4
-        assert isinstance(split.images[0], Image.Image)
-
-    def test_item_order_is_deterministic(self, mini_imagenet_root: Path) -> None:
-        first = load_split("mini_imagenet", "test", mini_imagenet_root)
-        second = load_split("mini_imagenet", "test", mini_imagenet_root)
-        assert np.array_equal(first.labels, second.labels)
-        assert first.class_names == second.class_names
-
-    def test_missing_data_error_names_path_and_readme(self, tmp_path: Path) -> None:
-        with pytest.raises(DatasetMissingError) as exc_info:
-            load_split("mini_imagenet", "test", tmp_path)
-        message = str(exc_info.value)
-        assert "mini_imagenet" in message
-        assert "README" in message
-
-    def test_val_is_a_valid_split(self, tmp_path: Path) -> None:
-        with pytest.raises(DatasetMissingError):
-            load_split("mini_imagenet", "val", tmp_path)
-
-
-@pytest.mark.slow
-class TestMiniImagenetReal:
-    """Runs against the manually acquired dataset; skips until it exists."""
-
-    def test_real_test_split_has_20_classes(self) -> None:
-        try:
-            split = load_split("mini_imagenet", "test", Path("data/raw"))
-        except DatasetMissingError:
-            pytest.skip("Mini-ImageNet not acquired; see README")
-        assert len(split.class_names) == 20
-        assert len(split.labels) == len(split.images)
+    def test_carries_its_identity(self, tmp_path: Path) -> None:
+        split = ds.load_split("fgvc_aircraft", "val", tmp_path)
+        assert split.name == "fgvc_aircraft"
+        assert split.split == "val"
 
 
 class TestValidation:
-    def test_unknown_dataset_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="no_such_dataset"):
-            load_split("no_such_dataset", "test", tmp_path)
+    def test_unknown_dataset_raises_listing_the_known_ones(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="unknown dataset"):
+            ds.load_split("mnist", "train", tmp_path)
 
-    def test_unknown_split_raises(self, stub_torchvision: None, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="val"):
-            load_split("mnist", "val", tmp_path)
+    def test_unknown_split_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(ValueError, match="unknown split"):
+            ds.load_split("dtd", "trainval", tmp_path)
+
+    def test_declared_class_count_is_enforced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A split whose class list disagrees with the spec is a corrupt download."""
+        monkeypatch.setitem(
+            ds.DATASET_SPECS,
+            "dtd",
+            ds.DatasetSpec(factory=StubTorchvisionDataset, kwargs={"partition": 1}, n_classes=47),
+        )
+        with pytest.raises(ValueError, match="47"):
+            ds.load_split("dtd", "train", tmp_path)
+
+
+class TestRealSplitSizes:
+    """Guards the numbers PRD and the alignment note rely on. Downloads; slow."""
+
+    @pytest.mark.slow
+    @pytest.mark.parametrize(
+        ("dataset", "n_classes", "sizes"),
+        [
+            ("dtd", 47, {"train": 1880, "val": 1880, "test": 1880}),
+            ("fgvc_aircraft", 100, {"train": 3334, "val": 3333, "test": 3333}),
+        ],
+    )
+    def test_official_split_sizes(
+        self,
+        dataset: str,
+        n_classes: int,
+        sizes: dict,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr(ds, "DATASET_SPECS", ds.DATASET_SPECS)
+        for split, expected in sizes.items():
+            loaded = ds.load_split(dataset, split, Path("data/raw"))
+            assert loaded.labels.shape[0] == expected
+            assert len(loaded.class_names) == n_classes
