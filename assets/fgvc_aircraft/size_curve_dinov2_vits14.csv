@@ -1,0 +1,7 @@
+head,k,top1,std
+linear_probe,5,0.429643,0.009184
+linear_probe,10,0.568457,0.005445
+linear_probe,full,0.741474,0.000866
+prototype,5,0.254625,0.006129
+prototype,10,0.290829,0.007038
+prototype,full,0.362136,

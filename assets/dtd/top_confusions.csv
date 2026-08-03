@@ -1,0 +1,16 @@
+true,predicted,rate
+dotted,polka-dotted,0.4250
+lined,banded,0.3250
+polka-dotted,dotted,0.2500
+grid,meshed,0.2000
+stained,marbled,0.2000
+pleated,gauzy,0.1750
+woven,braided,0.1750
+pitted,flecked,0.1500
+blotchy,smeared,0.1250
+bubbly,sprinkled,0.1250
+matted,fibrous,0.1250
+pitted,porous,0.1250
+polka-dotted,perforated,0.1250
+stained,blotchy,0.1250
+blotchy,sprinkled,0.1000

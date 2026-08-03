@@ -47,6 +47,14 @@ def _report_parser(subparsers) -> None:  # noqa: ANN001
     )
 
 
+def _figures_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser("figures", help="regenerate the Stage 1 figures")
+    p.add_argument("--config", type=Path, default=Path("config/figures.yaml"))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument("--assets-dir", type=Path, default=Path("assets"))
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(prog="fm_fewshot")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -54,6 +62,7 @@ def main(argv: list[str] | None = None) -> None:
     _run_parser(subparsers)
     _sweep_parser(subparsers)
     _report_parser(subparsers)
+    _figures_parser(subparsers)
     args = parser.parse_args(argv)
 
     if args.command == "features":
@@ -96,6 +105,20 @@ def main(argv: list[str] | None = None) -> None:
             results_dir=args.results_dir,
             progress=True,
         )
+
+    elif args.command == "figures":
+        from fm_fewshot.services.evaluation.figures import MissingRunError
+
+        try:
+            for path in sdk.make_figures(
+                args.config,
+                results_dir=args.results_dir,
+                data_root=args.data_root,
+                assets_dir=args.assets_dir,
+            ):
+                print(path)
+        except MissingRunError as error:
+            raise SystemExit(str(error)) from error
 
     elif args.command == "report":
         from fm_fewshot.services.evaluation.report import IncompleteCellError, write_table

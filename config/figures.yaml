@@ -1,0 +1,54 @@
+# Stage 1 figure configuration.
+#
+# viz_classes is fixed per dataset and never varies between encoders: the
+# write-up requires the same classes, the same test examples and the same class
+# colors whenever encoders or methods are compared on one dataset. Colors are
+# derived from the sorted class list (figures.class_colors), so pinning the
+# list here pins the colors too.
+
+projection: pca        # pca or tsne; PCA is a linear map both encoders' points
+                       # pass through identically, which is the safer default
+                       # when the figure's job is to compare encoders
+viz_seed: 0
+max_per_class: 60
+dpi: 200
+
+datasets:
+  dtd:
+    # Visually distinct textures, spread across the alphabet rather than
+    # clustered, so the plot is not dominated by near-synonyms.
+    viz_classes:
+      - banded
+      - bubbly
+      - chequered
+      - cobwebbed
+      - cracked
+      - honeycombed
+      - marbled
+      - striped
+      - swirly
+      - zigzagged
+    confusion_setting:
+      encoder: resnet18
+      head: linear_probe
+      k: full
+
+  fgvc_aircraft:
+    # One variant per manufacturer family where possible, so confusions in the
+    # plot are between genuinely different aircraft rather than between two
+    # trims of the same airframe.
+    viz_classes:
+      - 707-320
+      - 737-800
+      - 747-400
+      - A320
+      - ATR-72
+      - BAE 146-300
+      - Cessna 172
+      - DC-9-30
+      - E-195
+      - Spitfire
+    confusion_setting:
+      encoder: dinov2_vits14
+      head: linear_probe
+      k: full
