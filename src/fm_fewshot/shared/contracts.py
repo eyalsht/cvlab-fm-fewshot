@@ -60,6 +60,9 @@ class RunSummary:
     test_top1: float  # the reported number
     n_test: int
     n_train: int  # size of the training subset actually used
+    # The exact rows fitted on. Recorded rather than hashed so a cross-head
+    # comparison can be checked by reading two summaries (ADR-012).
+    subset_idx: tuple[int, ...]
     best_epoch: int | None  # ADR-014; None for closed-form heads
     epochs: list[EpochRecord]  # empty for closed-form heads
     fit_seconds: float

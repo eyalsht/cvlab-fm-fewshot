@@ -1,20 +1,22 @@
-"""Public API surface: run_experiment, evaluate_head, build_features.
+"""Public API surface: build_features, run_experiment, run_sweep, make_figures.
 
-The only import surface for notebooks and the CLI. run_experiment and
-evaluate_head arrive with the evaluation harness in Phase 5.
+The only import surface for notebooks and the CLI.
 """
 
 from pathlib import Path
 
+from fm_fewshot.services.evaluation.loop import run_experiment
 from fm_fewshot.services.features import cache
 from fm_fewshot.services.features.encoders import load_encoder
+
+__all__ = ["build_features", "run_experiment"]
 
 
 def build_features(
     dataset: str,
     split: str,
     *,
-    encoder: str = "clip_vit_b32",
+    encoder: str = "resnet18",
     data_root: Path = Path("data"),
     batch_size: int = 256,
     device: str = "auto",

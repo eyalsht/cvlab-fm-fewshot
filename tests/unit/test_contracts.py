@@ -49,6 +49,7 @@ def make_summary(**overrides: object) -> RunSummary:
         "test_top1": 0.5,
         "n_test": 1880,
         "n_train": 235,
+        "subset_idx": (0, 1, 2),
         "best_epoch": None,
         "epochs": [],
         "fit_seconds": 0.01,

@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 import torch
-from conftest import STUB_DATASET
 
+from conftest import STUB_DATASET
 from fm_fewshot import sdk
 from fm_fewshot.services.evaluation import loop as loop_module
 from fm_fewshot.services.heads.base import FewShotHead, HeadContext, register
