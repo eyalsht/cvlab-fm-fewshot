@@ -6,6 +6,7 @@ Each split gets its own npz plus a meta json carrying a sha256 of the npz
 payload; the checksum makes scp transfer between machines safe.
 """
 
+import contextlib
 import hashlib
 import json
 from pathlib import Path
@@ -20,6 +21,26 @@ from fm_fewshot.shared import gatekeeper
 
 class CacheChecksumError(RuntimeError):
     """Raised when a cache file does not match the checksum in its meta."""
+
+
+@contextlib.contextmanager
+def _full_precision():
+    """Disable TF32 for the extraction forward pass.
+
+    cudnn.allow_tf32 defaults to True on Ampere and later, which runs
+    convolutions at a 10-bit mantissa. Measured on this box, that puts a
+    relative error floor of about 1e-3 on ResNet-18 features, and it makes
+    results depend on which convolution algorithm cuDNN picks for a given batch
+    shape. Extraction happens once and takes seconds, so the precision is free
+    here and every downstream number inherits it. Restores the prior setting so
+    importing this module never changes global torch behavior for anything else.
+    """
+    previous = torch.backends.cudnn.allow_tf32
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        yield
+    finally:
+        torch.backends.cudnn.allow_tf32 = previous
 
 
 def cache_dir(data_root: Path, dataset: str, encoder_name: str) -> Path:
@@ -59,9 +80,11 @@ def build_features(
     resolved = gatekeeper.check("feature_extraction", device, allow_heavy_on_cpu)
     data = load_split(dataset, split, Path(data_root) / "raw")
     chunks = []
-    for start in range(0, len(data.labels), batch_size):
-        batch = [data.images[i] for i in range(start, min(start + batch_size, len(data.labels)))]
-        chunks.append(encoder.encode_images(batch, resolved))
+    with _full_precision():
+        for start in range(0, len(data.labels), batch_size):
+            end = min(start + batch_size, len(data.labels))
+            batch = [data.images[i] for i in range(start, end)]
+            chunks.append(encoder.encode_images(batch, resolved))
     features = torch.cat(chunks) if chunks else torch.empty(0, encoder.dim)
 
     n, d = features.shape

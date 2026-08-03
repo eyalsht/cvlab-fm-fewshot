@@ -111,6 +111,46 @@ class TestModelConfigInvalidation:
         assert changed.batch_calls > 0
 
 
+class TestThreeSplitLayout:
+    """train, val and test are separate files with separate meta.
+
+    The write-up forbids merging train and validation, so the layout is built
+    to make merging awkward rather than easy.
+    """
+
+    def test_each_split_gets_its_own_npz_and_meta(self, data_root: Path) -> None:
+        encoder = StubEncoder()
+        paths = {
+            split: build_features(
+                STUB_DATASET, split, encoder, data_root=data_root, allow_heavy_on_cpu=True
+            )
+            for split in ("train", "val", "test")
+        }
+        assert len({p.resolve() for p in paths.values()}) == 3
+        for split, npz in paths.items():
+            assert npz.name == f"{split}.npz"
+            assert (npz.parent / f"{split}_meta.json").exists()
+
+    def test_reading_one_split_never_opens_another(self, data_root: Path) -> None:
+        encoder = StubEncoder()
+        build_features(
+            STUB_DATASET, "train", encoder, data_root=data_root, allow_heavy_on_cpu=True
+        )
+        # val was never built, so a val read must fail rather than fall back.
+        with pytest.raises(FileNotFoundError, match="build_features"):
+            read_features(STUB_DATASET, "val", "stub", data_root=data_root, l2_normalize=False)
+
+    def test_split_is_part_of_the_meta_identity(self, data_root: Path) -> None:
+        encoder = StubEncoder()
+        build_features(
+            STUB_DATASET, "train", encoder, data_root=data_root, allow_heavy_on_cpu=True
+        )
+        _, _, meta = read_features(
+            STUB_DATASET, "train", "stub", data_root=data_root, l2_normalize=False
+        )
+        assert meta["split"] == "train"
+
+
 class TestGuardsAndValidation:
     def test_build_is_gatekept_as_heavy(self, data_root: Path,
                                         monkeypatch: pytest.MonkeyPatch) -> None:

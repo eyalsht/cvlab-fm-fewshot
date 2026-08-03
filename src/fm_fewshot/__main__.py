@@ -15,7 +15,7 @@ def _features_parser(subparsers) -> None:  # noqa: ANN001
     p = subparsers.add_parser("features", help="build a feature cache")
     p.add_argument("--dataset", required=True)
     p.add_argument("--split", required=True)
-    p.add_argument("--encoder", default="clip_vit_b32")
+    p.add_argument("--encoder", default="resnet18")
     p.add_argument("--data-root", type=Path, default=Path("data"))
     p.add_argument("--batch-size", type=int, default=256)
     p.add_argument("--device", default="auto")
