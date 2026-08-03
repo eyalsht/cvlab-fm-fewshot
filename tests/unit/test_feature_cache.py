@@ -111,18 +111,6 @@ class TestModelConfigInvalidation:
         assert changed.batch_calls > 0
 
 
-class TestClipWrapperConfig:
-    def test_openai_weights_load_the_quickgelu_config(self) -> None:
-        # The openai CLIP weights were trained with QuickGELU. open_clip's
-        # plain ViT-B-32 config is quick_gelu=False and open_clip 3.x only
-        # warns on the mismatch, silently computing wrong features.
-        # Regression for the 2026-07-19 cache build that hit this.
-        from fm_fewshot.services.features.encoders import ClipVitB32Encoder
-
-        assert ClipVitB32Encoder.model_name == "ViT-B-32-quickgelu"
-        assert ClipVitB32Encoder.weights_tag == "openai"
-
-
 class TestGuardsAndValidation:
     def test_build_is_gatekept_as_heavy(self, data_root: Path,
                                         monkeypatch: pytest.MonkeyPatch) -> None:

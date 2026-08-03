@@ -1,8 +1,16 @@
-"""Frozen encoder wrappers: open_clip CLIP ViT-B/32 and the test stub.
+"""Frozen encoder wrappers (ADR-013): ResNet-18, DINOv2 ViT-S/14, and a stub.
 
 Encoders are pure functions of the image: frozen weights, eval mode, no
-gradient. The cache records name and weights_tag so a cache built with one
-set of weights is never silently read as another.
+gradient. Each carries its own preprocessing, because the write-up requires
+each checkpoint's associated transform and because DINOv2's patch size 14
+makes a shared transform wrong, not merely non-compliant.
+
+name, model_name and weights_tag all enter the cache key. That is the
+2026-07-19 contamination lesson made structural: a cache built by a differently
+configured model of the same name must never be accepted as up to date.
+
+Weights load lazily inside the first encode, so importing the package costs
+nothing and the unit suite never touches a download.
 """
 
 from collections.abc import Sequence
@@ -27,6 +35,10 @@ class StubEncoder:
         self.dim = 8
         self.batch_calls = 0
 
+    @property
+    def preprocess(self):  # noqa: ANN201 - duck-typed transform
+        return lambda image: image
+
     def encode_images(self, images: Sequence[Image.Image], device: torch.device) -> torch.Tensor:
         self.batch_calls += 1
         rows = []
@@ -37,47 +49,122 @@ class StubEncoder:
         return torch.stack(rows).float()
 
 
-class ClipVitB32Encoder:
-    """open_clip ViT-B-32 image tower, openai weights, loaded lazily.
+class ResNet18Encoder:
+    """torchvision ResNet-18, ImageNet-1K weights, 512-dim pre-classifier features.
 
-    The openai weights were trained with QuickGELU, so the model config must
-    be the -quickgelu variant; the plain ViT-B-32 config silently computes
-    wrong features under open_clip 3.x, which only warns on the mismatch.
-    Weight download happens once per machine on first use. The forward path
-    is untested by the unit suite (needs the download); it is exercised when
-    real caches are built.
+    The write-up asks for "the 512-dim representation before the final
+    classification layer", so fc is replaced by Identity and the pooled output
+    is the feature.
     """
 
-    name = "clip_vit_b32"
-    model_name = "ViT-B-32-quickgelu"
-    weights_tag = "openai"
+    name = "resnet18"
+    model_name = "resnet18"
+    weights_tag = "IMAGENET1K_V1"
 
     def __init__(self) -> None:
         self.dim = 512
         self._model = None
         self._preprocess = None
 
-    def _load(self, device: torch.device) -> None:
-        import open_clip
+    @property
+    def preprocess(self):  # noqa: ANN201 - duck-typed transform
+        if self._preprocess is None:
+            from torchvision.models import ResNet18_Weights
 
-        model, _, preprocess = open_clip.create_model_and_transforms(
-            self.model_name, pretrained=self.weights_tag
-        )
-        self._model = model.eval().to(device)
-        self._preprocess = preprocess
+            # Resolves without downloading the checkpoint.
+            self._preprocess = ResNet18_Weights.IMAGENET1K_V1.transforms()
+        return self._preprocess
+
+    @property
+    def model(self):  # noqa: ANN201 - duck-typed module, used by tests
+        if self._model is None:
+            raise RuntimeError("model is not loaded until the first encode_images call")
+        return self._model
+
+    def _load(self, device: torch.device) -> None:
+        from torchvision.models import ResNet18_Weights, resnet18
+
+        model = resnet18(weights=ResNet18_Weights.IMAGENET1K_V1)
+        model.fc = torch.nn.Identity()
+        _freeze(model)
+        self._model = model.to(device)
 
     def encode_images(self, images: Sequence[Image.Image], device: torch.device) -> torch.Tensor:
         if self._model is None:
             self._load(device)
-        batch = torch.stack([self._preprocess(img.convert("RGB")) for img in images]).to(device)
+        batch = torch.stack([self.preprocess(img.convert("RGB")) for img in images]).to(device)
         with torch.no_grad():
-            features = self._model.encode_image(batch)
+            features = self._model(batch)
         return features.float().cpu()
+
+
+class Dinov2ViTS14Encoder:
+    """DINOv2 ViT-S/14 via timm, 384-dim final class token.
+
+    timm rather than torch.hub: a pinned wheel in the lockfile is reproducible
+    where a runtime git clone is not. The checkpoint's own data config gives
+    518x518 inputs (14 * 37), which is why the transform cannot be shared with
+    ResNet-18.
+    """
+
+    name = "dinov2_vits14"
+    model_name = "vit_small_patch14_dinov2.lvd142m"
+    weights_tag = "lvd142m"
+    patch_size = 14
+
+    def __init__(self) -> None:
+        self.dim = 384
+        self._model = None
+        self._preprocess = None
+
+    @property
+    def preprocess(self):  # noqa: ANN201 - duck-typed transform
+        if self._preprocess is None:
+            import timm
+
+            # pretrained=False: the architecture alone resolves the data config,
+            # so this stays offline until an actual encode happens.
+            skeleton = timm.create_model(self.model_name, pretrained=False, num_classes=0)
+            config = timm.data.resolve_model_data_config(skeleton)
+            self._preprocess = timm.data.create_transform(**config, is_training=False)
+        return self._preprocess
+
+    @property
+    def model(self):  # noqa: ANN201 - duck-typed module, used by tests
+        if self._model is None:
+            raise RuntimeError("model is not loaded until the first encode_images call")
+        return self._model
+
+    def _load(self, device: torch.device) -> None:
+        import timm
+
+        model = timm.create_model(self.model_name, pretrained=True, num_classes=0)
+        _freeze(model)
+        self._model = model.to(device)
+
+    def encode_images(self, images: Sequence[Image.Image], device: torch.device) -> torch.Tensor:
+        if self._model is None:
+            self._load(device)
+        batch = torch.stack([self.preprocess(img.convert("RGB")) for img in images]).to(device)
+        with torch.no_grad():
+            # forward_features returns [B, 1 + n_patches, D]; token 0 is the
+            # class token the write-up asks for. num_classes=0 would otherwise
+            # hand back the pooled representation, which is not the same thing.
+            tokens = self._model.forward_features(batch)
+        return tokens[:, 0].float().cpu()
+
+
+def _freeze(model: torch.nn.Module) -> None:
+    """Eval mode and no gradients, asserted here rather than assumed downstream."""
+    model.eval()
+    for parameter in model.parameters():
+        parameter.requires_grad_(False)
 
 
 ENCODERS = {
     "stub": StubEncoder,
-    "clip_vit_b32": ClipVitB32Encoder,
+    "resnet18": ResNet18Encoder,
+    "dinov2_vits14": Dinov2ViTS14Encoder,
 }
 
 
