@@ -59,7 +59,7 @@ class TestHeavyJobGuard:
         with pytest.raises(ValueError, match="no_such_job"):
             check("no_such_job", "cpu")
 
-    def test_heavy_job_registry_matches_claude_md(self) -> None:
+    def test_heavy_job_registry_matches_adr_010(self) -> None:
         expected = frozenset(
             {"feature_extraction", "rolled_out_sweep", "stage3_training", "fine_tuning"}
         )

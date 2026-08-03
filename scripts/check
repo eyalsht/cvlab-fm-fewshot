@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Every quality gate, one command, exit code is the verdict.
+#
+#   ./scripts/check          lint + tests + coverage (skips slow tests)
+#   ./scripts/check --all    the same, including slow tests that need the
+#                            datasets and pretrained checkpoints on disk
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+markers=(-m "not slow")
+if [[ "${1:-}" == "--all" ]]; then
+    markers=()
+fi
+
+echo "==> ruff"
+uv run ruff check src/ tests/
+
+echo "==> pytest + coverage"
+uv run pytest tests/ "${markers[@]}"
+
+echo "==> all gates passed"
