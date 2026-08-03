@@ -165,11 +165,11 @@ class TestSinglePairConvergence:
             t = torch.rand(64)
             loss = cfm_loss(net, x0, x1, t)
             if step == 0:
-                first = float(loss)
+                first = float(loss.detach())
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        assert float(loss) < first
+        assert float(loss.detach()) < first
 
 
 class TestSinusoidalEmbedding:
