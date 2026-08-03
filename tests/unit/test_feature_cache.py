@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 import torch
 import torch.nn.functional as F  # noqa: N812
-from PIL import Image
 
+from conftest import STUB_DATASET
 from fm_fewshot.services.features.cache import (
     CacheChecksumError,
     build_features,
@@ -21,21 +21,14 @@ N_ITEMS = N_CLASSES * PER_CLASS
 
 
 @pytest.fixture
-def data_root(tmp_path: Path) -> Path:
-    """30 grayscale images whose pixel value is the item's global index."""
-    index = 0
-    for class_name in ("class_a", "class_b", "class_c"):
-        class_dir = tmp_path / "raw" / "mini_imagenet" / "test" / class_name
-        class_dir.mkdir(parents=True)
-        for j in range(PER_CLASS):
-            Image.new("L", (4, 4), color=index).save(class_dir / f"img_{j:02d}.png")
-            index += 1
+def data_root(tmp_path: Path, stub_dataset: str) -> Path:
+    """A writable root; the stub_dataset fixture supplies the items themselves."""
     return tmp_path
 
 
 def build(data_root: Path, encoder: StubEncoder) -> Path:
     return build_features(
-        "mini_imagenet", "test", encoder, data_root=data_root, allow_heavy_on_cpu=True
+        STUB_DATASET, "test", encoder, data_root=data_root, allow_heavy_on_cpu=True
     )
 
 
@@ -44,7 +37,7 @@ class TestRoundTrip:
         encoder = StubEncoder()
         build(data_root, encoder)
         features, labels, meta = read_features(
-            "mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False
+            STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=False
         )
         assert features.dtype == torch.float32
         assert features.shape == (N_ITEMS, encoder.dim)
@@ -58,7 +51,7 @@ class TestRoundTrip:
     def test_row_i_is_dataset_item_i(self, data_root: Path) -> None:
         build(data_root, StubEncoder())
         features, _, _ = read_features(
-            "mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False
+            STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=False
         )
         assert features[:, 0].tolist() == [float(i) for i in range(N_ITEMS)]
 
@@ -78,10 +71,10 @@ class TestNormalization:
     def test_read_normalized_is_unit_norm_and_matches_functional(self, data_root: Path) -> None:
         build(data_root, StubEncoder())
         raw, _, _ = read_features(
-            "mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False
+            STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=False
         )
         normalized, _, meta = read_features(
-            "mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=True
+            STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=True
         )
         norms = normalized.norm(dim=1)
         assert torch.allclose(norms, torch.ones(N_ITEMS))
@@ -96,14 +89,14 @@ class TestCorruption:
         payload[len(payload) // 2] ^= 0xFF
         npz_path.write_bytes(bytes(payload))
         with pytest.raises(CacheChecksumError, match="rebuild"):
-            read_features("mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False)
+            read_features(STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=False)
 
 
 class TestModelConfigInvalidation:
     def test_meta_records_the_model_name(self, data_root: Path) -> None:
         build(data_root, StubEncoder())
         _, _, meta = read_features(
-            "mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False
+            STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=False
         )
         assert meta["model_name"] == StubEncoder.model_name
 
@@ -135,7 +128,7 @@ class TestGuardsAndValidation:
                                         monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
         with pytest.raises(HeavyJobOnCpuError):
-            build_features("mini_imagenet", "test", StubEncoder(), data_root=data_root)
+            build_features(STUB_DATASET, "test", StubEncoder(), data_root=data_root)
 
     def test_encoder_dim_mismatch_aborts(self, data_root: Path) -> None:
         lying = StubEncoder()
@@ -145,4 +138,4 @@ class TestGuardsAndValidation:
 
     def test_missing_cache_read_says_build_first(self, data_root: Path) -> None:
         with pytest.raises(FileNotFoundError, match="build_features"):
-            read_features("mini_imagenet", "test", "stub", data_root=data_root, l2_normalize=False)
+            read_features(STUB_DATASET, "test", "stub", data_root=data_root, l2_normalize=False)

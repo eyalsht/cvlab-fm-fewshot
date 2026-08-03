@@ -16,6 +16,11 @@ from fm_fewshot.services.data import datasets as ds
 
 SPLITS = ("train", "val", "test")
 
+# Captured before any fixture stubs the registry, so the slow tests can reach
+# the real torchvision constructors.
+REAL_SPECS = dict(ds.DATASET_SPECS)
+RAW_ROOT = Path("data/raw")
+
 
 class StubTorchvisionDataset:
     """Mimics DTD and FGVCAircraft: private _labels, public classes, no targets."""
@@ -150,8 +155,10 @@ class TestRealSplitSizes:
         sizes: dict,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr(ds, "DATASET_SPECS", ds.DATASET_SPECS)
+        if not RAW_ROOT.exists():
+            pytest.skip(f"{RAW_ROOT} absent; run the features CLI to download first")
+        monkeypatch.setattr(ds, "DATASET_SPECS", REAL_SPECS)
         for split, expected in sizes.items():
-            loaded = ds.load_split(dataset, split, Path("data/raw"))
+            loaded = ds.load_split(dataset, split, RAW_ROOT)
             assert loaded.labels.shape[0] == expected
             assert len(loaded.class_names) == n_classes
