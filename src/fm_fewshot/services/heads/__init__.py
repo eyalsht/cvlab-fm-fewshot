@@ -14,8 +14,6 @@ from fm_fewshot.services.heads.base import (
 )
 from fm_fewshot.services.heads.linear_probe import LinearProbeHead
 from fm_fewshot.services.heads.prototype import PrototypeHead
-from fm_fewshot.services.heads.ridge import RidgeHead
-from fm_fewshot.services.heads.zeroshot_clip import ZeroShotClipHead
 
 __all__ = [
     "FewShotHead",
@@ -23,8 +21,6 @@ __all__ = [
     "LinearProbeHead",
     "NotFittedError",
     "PrototypeHead",
-    "RidgeHead",
-    "ZeroShotClipHead",
     "make_head",
     "register",
     "registered_heads",

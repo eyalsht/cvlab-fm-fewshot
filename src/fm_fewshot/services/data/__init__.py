@@ -1,1 +1,1 @@
-"""Dataset loaders and the episode sampler."""
+"""Dataset loaders and the training-subset sampler."""

@@ -2,11 +2,13 @@
 
 Every method in the study, baseline or FM, implements this one interface so the
 evaluation loop never branches per method (ADR-002). Heads register under a key
-and are built through make_head, which hands each head the Episode (for the
-class ids a head like zeroshot_clip needs) and a HeadContext seam carrying any
-precomputed tensors the head cannot derive from support features alone. The
-seam is how zeroshot_clip receives its class text embeddings without a head
-ever loading open_clip inside an experiment.
+and are built through make_head, which hands each head a HeadContext seam
+carrying any precomputed tensors the head cannot derive from its training
+features alone.
+
+The seam currently carries nothing: its only consumer was zeroshot_clip, which
+left the project with Option B. It stays because the FM heads will need it for
+prototypes computed outside the head.
 """
 
 from abc import ABC, abstractmethod
@@ -23,13 +25,11 @@ class NotFittedError(RuntimeError):
 
 @dataclass(frozen=True)
 class HeadContext:
-    """Construction-time inputs beyond cfg and episode.
+    """Construction-time inputs beyond cfg and the episode.
 
-    text_embeddings holds the per-episode class text rows for zeroshot_clip,
-    ordered to match episode.class_ids; every other head ignores it.
+    Empty for the Stage 1 heads. Kept as the seam for tensors a head cannot
+    derive from its own training features.
     """
-
-    text_embeddings: Tensor | None = None
 
 
 class FewShotHead(ABC):

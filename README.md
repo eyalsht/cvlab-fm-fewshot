@@ -21,32 +21,12 @@ needed on either.
 
 ## Datasets
 
-MNIST and CIFAR-10 download automatically through torchvision on first use
-into `data/raw/`.
+Two datasets, both downloading automatically through torchvision on first use
+into `data/raw/`:
 
-### Mini-ImageNet acquisition
+- **DTD** (Describable Textures, 47 classes), official partition 1
+- **FGVC-Aircraft** (100 classes), `variant` annotation level
 
-Mini-ImageNet (Vinyals et al. 2016, splits by Ravi and Larochelle 2017) has
-no official host and must be downloaded manually under research terms. The
-loader expects one directory per class containing that class's images:
-
-```
-data/raw/mini_imagenet/
-  train/  64 class directories, e.g. n01532829/
-  val/    16 class directories
-  test/   20 class directories
-```
-
-Class directories follow the standard Ravi-Larochelle split. Any image
-format PIL reads is accepted; images are converted to RGB at load time.
-File names within a class are read in sorted order, so the on-disk layout
-fully determines item order.
-
-After placing the data, verify with:
-
-```
-uv run pytest tests/unit/test_datasets.py -m slow --no-cov
-```
-
-If the directory is missing the loader raises an error pointing back to
-this section instead of a traceback from deeper in the stack.
+All classes and the official train/val/test splits are used. Train and
+validation are never merged, and the test split is read only for final
+evaluation.
