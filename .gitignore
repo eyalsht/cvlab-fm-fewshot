@@ -6,6 +6,9 @@
 # planning workspace (separate private repository mounted here)
 /docs/
 
+# curated public repository, also a separate repository mounted here
+/public/
+
 # course material and local media
 /references/
 /vid2*
