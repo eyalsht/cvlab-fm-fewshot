@@ -230,19 +230,27 @@ uv run python scripts/toy_transport_figure.py
 - **Solver.** Fixed-step Euler and midpoint over [0,1], measured convergence orders **1.0** and **2.0** against a
   closed-form solution. Step count is never chosen internally — it is a first-class experiment axis. No `no_grad`
   anywhere, so the same code path serves inference and rolled-out training.
-- **Velocity network.** Small MLP over `concat(x, sinusoidal_time_embedding(t))`. Time enters through an embedding, not
-  as a raw scalar: one scalar among hundreds of feature dimensions is easy to ignore, and a field that ignores `t`
-  still trains and still transports — that failure would be silent.
+- **Velocity network.** Small MLP, two hidden layers of width 512, SiLU. Time enters as the **scalar `t` concatenated
+  to the feature**, which is what the Stage 2 specification asks for. Our sinusoidal embedding is kept as a one-cell
+  ablation, because one scalar among hundreds of feature dimensions is easy to ignore and a field that ignores `t`
+  still trains and still transports — that failure would be silent. So the suite asserts it directly: a fitted scalar
+  field must separate two distinct times on one input.
 - **2D toy.** The Stage 2 mechanism in miniature, and the honest check before any of it touches real features.
 
 > The toy's first version was three well-separated isotropic Gaussians. It passed the 95%-at-8-steps criterion
 > immediately and was **worthless** — nearest prototype already scored 1.000 before transport, so "transport beats the
 > baseline" could only be satisfied trivially. It was replaced with the geometry the Stage 1 diagnosis found in real
-> features. The flow now recovers the *entire* anisotropy loss: **0.875 → 1.000** at stretch 5, **0.787 → 1.000** at
+> features. The flow now recovers the *entire* anisotropy loss: **0.875 → 1.000** at stretch 5, **0.786 → 1.000** at
 > stretch 7, and nothing at all on round classes, which is the control. The suite asserts the toy is still hard enough
 > to discriminate, because a toy that stops discriminating is a test that stopped testing.
 
-**Next:** the flow-matching head itself — the `HeadContext` seam already exists for the tensors it will need.
+- **The head.** `fm_standard` transports a frozen feature toward its class prototype and then classifies with the
+  Stage 1 cosine rule, unchanged. It does not reimplement that rule: it holds a fitted prototype head and calls its
+  `predict` on the transported features, so with a zero field the head reproduces the Stage 1 baseline
+  **bit-identically**, and the suite asserts exactly that. Standard training never reads the step count, which is why
+  `T = 4` and `T = 12` are one field read at two resolutions rather than two models.
+
+**Next:** rolled-out training, then the grid.
 
 </details>
 
@@ -274,11 +282,15 @@ raised that the next meeting needs to settle.
 2. **Unconditional or class-conditional field?** The toy field is unconditional on purpose — at inference the class is
    unknown, so it must infer the basin from position alone. Whether that survives 100 classes in 384 dimensions is
    genuinely open, and a conditional variant changes what the head is allowed to see.
-3. **Step count as a reported axis.** The solver deliberately never picks N. How many NFE do we report, and is
-   accuracy-vs-NFE a headline result or an appendix?
-4. **Simulation-free vs rolled-out training.** Rolled-out backprop through all N steps is supported by the solver
-   (no `no_grad` anywhere) but is a heavy job. Worth the GPU time at Stage 2, or does it belong in Stage 3?
-5. **Reflow / rectified flow.** The `straightness` metric already exists. Is straightening in scope, or a stretch goal?
+3. **Step count as a reported axis.** Settled by the Stage 2 specification: `T ∈ {4, 12}`, no sweep. The two values
+   mean different things for the two schemes, and the write-up of the results has to say so. For standard training one
+   field is read at two resolutions, so the gap measures the **curvature** of the field. For rolled-out training the
+   step count is the depth of the network being trained, so `T = 4` and `T = 12` are **different models** and the gap
+   measures capacity.
+4. **Simulation-free vs rolled-out training.** Settled: both are Stage 2, and their comparison is one of its three
+   stated goals. The cost of rolled-out training is measured on the largest setting before the grid launches.
+5. **Reflow / rectified flow.** The `straightness` metric already exists but straightening was not asked for, so it is
+   parked. If the `T = 4` to `T = 12` gap for standard training turns out large, that gap is its motivation.
 6. **Probe tuning on DINOv2.** At full data the DINOv2 probe is at 74.1% with std 0.001 — near-saturated and very
    stable. Do we tune from validation (and report the change, as permitted), or keep his initial config everywhere for
    comparability?
@@ -292,7 +304,7 @@ This is a research repo held to production gates, because a number nobody can re
 | | |
 |:--|:--|
 | **Test-first** | Every feature commit is preceded by a `test:` commit that is **red**. The history reads as the specification. |
-| **240 tests · 90.8% coverage** | `fail_under = 85` in `pyproject.toml`. Slow tests that need real data are marked and gated separately. |
+| **266 tests · 91.0% coverage** | `fail_under = 85` in `pyproject.toml`. Slow tests that need real data are marked and gated separately. |
 | **Reproducibility** | Every run records its git commit, its exact subset indices (not a hash — so a cross-head comparison can be checked by reading two summaries), and its full config. Re-running a cell gives bit-identical `summary.json` and `epochs.csv`. |
 | **Atomic writes** | Results are written to a temp directory and renamed, so an interrupted run leaves nothing behind. |
 | **Numerical honesty** | cuDNN TF32 is disabled during extraction. It defaults on for Ampere+, runs convolutions at a 10-bit mantissa, and made features depend on which convolution algorithm cuDNN picked for a given batch shape — a 3.1e-3 error floor that dropped to 6.2e-6 with it off. Extraction takes seconds and happens once, so the precision is free and every downstream number inherits it. |
@@ -308,9 +320,9 @@ This is a research repo held to production gates, because a number nobody can re
 - [x] **Phase 5** — evaluation loop, protocol-derived sweep, report, `TABLE.md`
 - [x] **Phase 6** — the four Stage 1 figure families
 - [x] **Phase 7** — flow machinery: path, CFM objective, ODE solver, velocity MLP, 2D toy transport
-- [ ] **Phase 8** — the flow-matching head on real features
-- [ ] **Phase 9** — step-count and NFE sweeps; rolled-out training
-- [ ] **Phase 10** — reflow / straightening, if in scope
+- [ ] **Phase 8** — Stage 2: both training schemes, the 108-run grid, `ΔAcc`, and the four Stage 2 figure families
+- [ ] **Phase 9** — step-count sweeps and reflow; parked, since the specification asks for neither
+- [ ] **Phase 10** — Stage 3: the flow-matching block ahead of the linear probe
 
 ---
 
