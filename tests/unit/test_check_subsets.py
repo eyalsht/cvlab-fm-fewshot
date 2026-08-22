@@ -54,6 +54,7 @@ class TestEmptyTrees:
     def test_a_missing_results_directory_is_not_a_failure(self, tmp_path: Path) -> None:
         """The worktree of anyone who has not run the grid yet. Nothing to check."""
         assert main([str(tmp_path / "results")]) == 0
+        assert find_subset_disagreements(tmp_path / "results") == []
 
     def test_an_empty_results_directory_is_not_a_failure(self, tmp_path: Path) -> None:
         (tmp_path / "results").mkdir()

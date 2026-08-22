@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# Cross-head subset guard, one command, exit code is the verdict.
+#
+#   ./scripts/check_subsets             checks results/
+#   ./scripts/check_subsets DIR         checks another results tree
+#
+# Every head at one (dataset, encoder, k, subset_seed) must have fitted on
+# byte-identical rows; a mismatch means an accuracy difference cannot be
+# attributed to the head. An absent or empty tree passes: results/ is
+# gitignored, so a fresh checkout has none.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+uv run python -m fm_fewshot.services.evaluation.subset_check "$@"
