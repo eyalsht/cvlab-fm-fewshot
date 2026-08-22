@@ -428,5 +428,8 @@ class TestTraining:
             train_rolled_out_field(torch.zeros(4, 3), torch.zeros(4, 2), sample_steps=4)
 
     def test_a_step_count_below_one_is_refused(self) -> None:
+        """Refused at both doors: there is no depth-zero rolled-out model."""
         with pytest.raises(ValueError, match="sample_steps must be >= 1"):
             FmRolledHead(n_classes=3, sample_steps=0)
+        with pytest.raises(ValueError, match="sample_steps must be >= 1"):
+            train_rolled_out_field(torch.zeros(4, 3), torch.zeros(4, 3), sample_steps=0)
