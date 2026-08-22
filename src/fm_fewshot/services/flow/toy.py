@@ -17,7 +17,7 @@ from dataclasses import dataclass
 import torch
 from torch import Tensor
 
-from fm_fewshot.services.flow.objective import cfm_loss
+from fm_fewshot.services.flow.training.standard import train_standard_field
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 
 
@@ -77,28 +77,21 @@ def train_toy_field(
     lr: float = 1e-2,
     hidden_dims: tuple[int, ...] = (64, 64),
 ) -> VelocityMLP:
-    """Standard CFM training on (example, its class prototype) pairs."""
-    # Scalar conditioning, explicitly: the toy is the smallest thing that runs
-    # what the Stage 2 heads run (ADR-019).
-    field = VelocityMLP(
-        dim=2, hidden_dims=hidden_dims, time_conditioning="scalar", seed=seed
+    """Standard CFM training on (example, its class prototype) pairs.
+
+    Delegates to the Stage 2 trainer rather than keeping a second copy of it.
+    The toy is only worth running if it runs the same code the heads run.
+    """
+    field, _ = train_standard_field(
+        problem.train_x,
+        problem.prototypes[problem.train_y],
+        hidden_dims=hidden_dims,
+        time_conditioning="scalar",
+        n_train_steps=steps,
+        batch_size=batch_size,
+        lr=lr,
+        init_seed=seed,
     )
-    if steps == 0:
-        return field
-
-    generator = torch.Generator().manual_seed(seed)
-    optimizer = torch.optim.Adam(field.parameters(), lr=lr)
-    x1_all = problem.prototypes[problem.train_y]
-
-    for _ in range(steps):
-        rows = torch.randint(
-            0, problem.train_x.shape[0], (batch_size,), generator=generator
-        )
-        t = torch.rand(batch_size, generator=generator)
-        loss = cfm_loss(field, problem.train_x[rows], x1_all[rows], t)
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
     return field
 
 

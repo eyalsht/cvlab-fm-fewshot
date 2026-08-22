@@ -14,6 +14,7 @@ import pytest
 import torch
 from test_head_contract import make_config, run_head_battery, separable_scenario
 
+from fm_fewshot.services.flow.toy import make_toy_problem
 from fm_fewshot.services.flow.training.standard import train_standard_field, transport
 from fm_fewshot.services.heads.fm_standard import FmStandardHead
 from fm_fewshot.services.heads.prototype import PrototypeHead
@@ -205,3 +206,48 @@ class TestTransportGeometry:
         assert states.shape == (5, query_x.shape[0], query_x.shape[1])
         assert torch.equal(states[0], query_x)
         assert torch.equal(states[-1], head.transport(query_x))
+
+
+class TestAnisotropicToy:
+    """The Phase 7 toy, now driven through the head rather than the bare field.
+
+    The stretched regime is the one that says something: classes that are
+    linearly separable but not compact around their means, which is the
+    geometry the Stage 1 diagnosis found in real DINOv2 features. The round
+    control is there so a passing stretched case cannot be read as transport
+    helping everywhere.
+    """
+
+    @staticmethod
+    def _accuracy(head, x: torch.Tensor, y: torch.Tensor) -> float:
+        return float((head.predict(x).argmax(dim=1) == y).float().mean())
+
+    def _both_heads(self, anisotropy: float):
+        problem = make_toy_problem(seed=0, anisotropy=anisotropy)
+        baseline = PrototypeHead(n_classes=problem.n_classes)
+        baseline.fit(problem.train_x, problem.train_y, problem.test_x, problem.test_y)
+        head = FmStandardHead(
+            problem.n_classes,
+            sample_steps=4,
+            n_train_steps=800,
+            batch_size=128,
+            lr=1e-2,
+            hidden_dims=(64, 64),
+            init_seed=0,
+        )
+        head.fit(problem.train_x, problem.train_y, problem.test_x, problem.test_y)
+        return problem, baseline, head
+
+    def test_transport_beats_the_prototype_rule_on_stretched_classes(self) -> None:
+        problem, baseline, head = self._both_heads(anisotropy=3.0)
+        before = self._accuracy(baseline, problem.test_x, problem.test_y)
+        after = self._accuracy(head, problem.test_x, problem.test_y)
+        assert before < 0.99, f"toy is too easy to be informative: {before}"
+        assert after > before
+
+    def test_transport_has_nothing_to_recover_on_round_classes(self) -> None:
+        problem, baseline, head = self._both_heads(anisotropy=1.0)
+        before = self._accuracy(baseline, problem.test_x, problem.test_y)
+        after = self._accuracy(head, problem.test_x, problem.test_y)
+        assert before > 0.99, f"the control should already be solved: {before}"
+        assert after == before
