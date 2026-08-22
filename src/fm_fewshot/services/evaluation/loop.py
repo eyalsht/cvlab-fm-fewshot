@@ -102,8 +102,16 @@ def run_experiment(
         fit_seconds=fit_seconds,
         predict_seconds=predict_seconds,
         wall_seconds=time.perf_counter() - started,
+        loss_history=list(getattr(head, "loss_history", [])),
     )
-    _write_results(summary, predictions.numpy(), results_dir)
+    # Only the head sees its own intermediate training steps, so a periodic
+    # val_top1 in loss_curve.csv can only come from the head choosing to record
+    # it there (val_top1_history, not part of the FewShotHead contract because
+    # most heads have nothing to record). It is read here and nowhere else:
+    # it never reaches RunSummary, so whether a head records it cannot move any
+    # number the run reports (ADR-024).
+    val_top1_history = list(getattr(head, "val_top1_history", []))
+    _write_results(summary, predictions.numpy(), results_dir, val_top1_history=val_top1_history)
     return summary
 
 
@@ -112,7 +120,13 @@ def _trains(head) -> bool:  # noqa: ANN001 - duck-typed head
     return bool(getattr(head, "epochs", []))
 
 
-def _write_results(summary: RunSummary, predictions: np.ndarray, results_dir: Path) -> None:
+def _write_results(
+    summary: RunSummary,
+    predictions: np.ndarray,
+    results_dir: Path,
+    *,
+    val_top1_history: list[tuple[int, float]] | None = None,
+) -> None:
     """Write to a temp directory and rename, so an interrupted run leaves nothing."""
     results_dir = Path(results_dir)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -121,6 +135,7 @@ def _write_results(summary: RunSummary, predictions: np.ndarray, results_dir: Pa
         save_config(summary.config, staging / "config.yaml")
         payload = dataclasses.asdict(summary)
         payload.pop("epochs")
+        payload.pop("loss_history")
         payload["config"] = dataclasses.asdict(summary.config)
         (staging / "summary.json").write_text(
             json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
@@ -135,6 +150,14 @@ def _write_results(summary: RunSummary, predictions: np.ndarray, results_dir: Pa
                     writer.writerow(
                         [record.epoch, record.train_loss, record.val_loss, record.val_accuracy]
                     )
+
+        if summary.loss_history:
+            val_by_step = dict(val_top1_history or [])
+            with (staging / "loss_curve.csv").open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.writer(handle)
+                writer.writerow(["step", "train_loss", "val_top1"])
+                for step, loss in enumerate(summary.loss_history, start=1):
+                    writer.writerow([step, loss, val_by_step.get(step, "")])
         staging.rename(results_dir / summary.run_id)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

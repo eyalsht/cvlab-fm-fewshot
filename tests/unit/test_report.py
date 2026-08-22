@@ -162,7 +162,7 @@ class TestDeltaAccuracy:
         write_cell(tmp_path, "fm_standard", [0.53, 0.55, 0.57])
         write_table(tmp_path, tmp_path / "TABLE.md")
         rows = (tmp_path / "TABLE.md").read_text().splitlines()
-        proto_row = next(r for r in rows if "prototype" in r)
+        proto_row = next(r for r in rows if "| prototype |" in r)
         cells = [c.strip() for c in proto_row.strip("|").split("|")]
         assert cells[-1] == ""
 
