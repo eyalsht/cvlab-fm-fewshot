@@ -68,6 +68,10 @@ class RunSummary:
     fit_seconds: float
     predict_seconds: float
     wall_seconds: float
+    # Per-step training loss; empty for heads with no stepwise training loop,
+    # e.g. prototype (ADR-024). Written to loss_curve.csv, not epochs.csv:
+    # FM heads have one scalar loss and nothing to select.
+    loss_history: list[float] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

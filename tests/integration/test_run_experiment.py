@@ -1,5 +1,6 @@
 """Run-loop tests per PRD_evaluation_protocol section 5, against a stub head."""
 
+import csv
 import dataclasses
 import json
 from pathlib import Path
@@ -10,6 +11,7 @@ import torch
 from conftest import STUB_DATASET
 from fm_fewshot import sdk
 from fm_fewshot.services.evaluation import loop as loop_module
+from fm_fewshot.services.evaluation.metrics import top1_accuracy
 from fm_fewshot.services.heads.base import FewShotHead, HeadContext, register
 from fm_fewshot.shared.contracts import ExperimentConfig
 
@@ -41,6 +43,51 @@ class StubHead(FewShotHead):
 
     def predict(self, query_x):
         return (query_x @ self._means.T).float()
+
+
+@register("stub_step_head")
+class StubStepHead(StubHead):
+    """A stepwise trainer standing in for the FM heads (ADR-024).
+
+    Fits exactly like StubHead, then walks n_train_steps of a deterministic,
+    strictly decreasing loss and, every eval_every steps, records a real
+    validation top-1 by scoring the already-fitted means on val_x/val_y. This
+    is what a head that wants a val_top1 column in loss_curve.csv has to do:
+    the loop never sees an intermediate training state, only what the head
+    chose to record.
+    """
+
+    def __init__(self, n_classes: int, *, n_train_steps: int = 5, eval_every: int = 2) -> None:
+        super().__init__(n_classes)
+        self._n_train_steps = n_train_steps
+        self._eval_every = eval_every
+        self._loss_history: list[float] = []
+        self._val_top1_history: list[tuple[int, float]] = []
+
+    @classmethod
+    def from_context(cls, cfg, n_classes, context: HeadContext):
+        params = cfg.head_params
+        return cls(
+            n_classes=n_classes,
+            n_train_steps=int(params.get("n_train_steps", 5)),
+            eval_every=int(params.get("eval_every", 2)),
+        )
+
+    @property
+    def loss_history(self) -> list[float]:
+        return list(self._loss_history)
+
+    @property
+    def val_top1_history(self) -> list[tuple[int, float]]:
+        return list(self._val_top1_history)
+
+    def fit(self, train_x, train_y, val_x, val_y) -> None:
+        super().fit(train_x, train_y, val_x, val_y)
+        for step in range(1, self._n_train_steps + 1):
+            self._loss_history.append(1.0 / step)
+            if self._eval_every > 0 and step % self._eval_every == 0:
+                accuracy = top1_accuracy(self.predict(val_x), val_y)
+                self._val_top1_history.append((step, accuracy))
 
 
 @pytest.fixture
@@ -89,6 +136,94 @@ class TestResultsTriple:
         run_dir = built_caches / "results" / summary.run_id
         assert summary.epochs == []
         assert not (run_dir / "epochs.csv").exists()
+
+
+class TestLossCurve:
+    """loss_curve.csv per ADR-024: FM heads train stepwise against one scalar
+    loss, with no validation loss and nothing to select, so EpochRecord and
+    epochs.csv do not describe them."""
+
+    def test_loss_curve_has_one_row_per_train_step(self, built_caches: Path) -> None:
+        summary = sdk.run_experiment(
+            make_config(
+                head="stub_step_head", head_params={"n_train_steps": 5, "eval_every": 2}
+            ),
+            data_root=built_caches,
+            results_dir=built_caches / "results",
+        )
+        run_dir = built_caches / "results" / summary.run_id
+        rows = list(csv.DictReader((run_dir / "loss_curve.csv").open(encoding="utf-8")))
+        assert len(rows) == 5
+        assert [row["step"] for row in rows] == ["1", "2", "3", "4", "5"]
+
+    def test_loss_curve_is_absent_for_a_head_with_no_loss_history(
+        self, built_caches: Path
+    ) -> None:
+        summary = sdk.run_experiment(
+            make_config(head="stub_head"),
+            data_root=built_caches,
+            results_dir=built_caches / "results",
+        )
+        run_dir = built_caches / "results" / summary.run_id
+        assert not (run_dir / "loss_curve.csv").exists()
+
+    def test_loss_curve_is_absent_for_prototype(self, built_caches: Path) -> None:
+        summary = sdk.run_experiment(
+            make_config(head="prototype"),
+            data_root=built_caches,
+            results_dir=built_caches / "results",
+        )
+        run_dir = built_caches / "results" / summary.run_id
+        assert not (run_dir / "loss_curve.csv").exists()
+
+    def test_val_top1_is_populated_only_on_eval_every_steps(self, built_caches: Path) -> None:
+        summary = sdk.run_experiment(
+            make_config(
+                head="stub_step_head", head_params={"n_train_steps": 5, "eval_every": 2}
+            ),
+            data_root=built_caches,
+            results_dir=built_caches / "results",
+        )
+        run_dir = built_caches / "results" / summary.run_id
+        rows = list(csv.DictReader((run_dir / "loss_curve.csv").open(encoding="utf-8")))
+        for row in rows:
+            step = int(row["step"])
+            if step % 2 == 0:
+                assert row["val_top1"] != ""
+            else:
+                assert row["val_top1"] == ""
+
+    def test_removing_the_val_top1_column_changes_no_reported_number(
+        self, built_caches: Path
+    ) -> None:
+        """val_top1 is diagnostic only: whether a head ever records it must not
+        move test_top1 or any other field the run reports."""
+        results = built_caches / "results"
+
+        def payload(run_id: str) -> dict:
+            raw = json.loads((results / run_id / "summary.json").read_text())
+            # config differs by construction (eval_every is a head_param); every
+            # other field is what "the run reports" and must not move.
+            for volatile in ("run_id", "config", "fit_seconds", "predict_seconds", "wall_seconds"):
+                raw.pop(volatile, None)
+            return raw
+
+        with_val = sdk.run_experiment(
+            make_config(
+                head="stub_step_head", head_params={"n_train_steps": 5, "eval_every": 2}
+            ),
+            data_root=built_caches,
+            results_dir=results,
+        )
+        without_val = sdk.run_experiment(
+            make_config(
+                head="stub_step_head", head_params={"n_train_steps": 5, "eval_every": 0}
+            ),
+            data_root=built_caches,
+            results_dir=results,
+        )
+        assert payload(with_val.run_id) == payload(without_val.run_id)
+        assert with_val.test_top1 == without_val.test_top1
 
 
 class TestTestSplitDiscipline:

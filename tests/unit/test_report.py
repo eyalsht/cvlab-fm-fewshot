@@ -138,3 +138,46 @@ class TestTable:
         text = (tmp_path / "TABLE.md").read_text()
         assert "0.420" in text
         assert "single run" in text
+
+
+def write_cell(results: Path, head: str, accuracies: list[float], **cfg_overrides) -> None:
+    """Three runs at three subset seeds, the protocol's usual cell (FR16)."""
+    for i, accuracy in enumerate(accuracies):
+        write_run(results, f"{head}-{i}", accuracy, head=head, subset_seed=i, **cfg_overrides)
+
+
+class TestDeltaAccuracy:
+    """dAcc = Acc_FM - Acc_baseline against the prototype row of the same
+    (dataset, encoder, K) cell (FR16, write-up deliverables)."""
+
+    def test_dacc_is_computed_against_the_prototype_baseline(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "fm_standard", [0.53, 0.55, 0.57])
+        write_table(tmp_path, tmp_path / "TABLE.md")
+        text = (tmp_path / "TABLE.md").read_text()
+        assert "+0.150" in text
+
+    def test_dacc_is_blank_on_the_baseline_row_itself(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "fm_standard", [0.53, 0.55, 0.57])
+        write_table(tmp_path, tmp_path / "TABLE.md")
+        rows = (tmp_path / "TABLE.md").read_text().splitlines()
+        proto_row = next(r for r in rows if "| prototype |" in r)
+        cells = [c.strip() for c in proto_row.strip("|").split("|")]
+        assert cells[-1] == ""
+
+    def test_dacc_sign_is_negative_when_fm_underperforms(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.58, 0.60, 0.62])
+        write_cell(tmp_path, "fm_standard", [0.43, 0.45, 0.47])
+        write_table(tmp_path, tmp_path / "TABLE.md")
+        text = (tmp_path / "TABLE.md").read_text()
+        assert "-0.150" in text
+
+    def test_report_stays_idempotent_with_dacc(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "fm_standard", [0.53, 0.55, 0.57])
+        table = tmp_path / "TABLE.md"
+        write_table(tmp_path, table)
+        first = table.read_bytes()
+        write_table(tmp_path, table)
+        assert table.read_bytes() == first

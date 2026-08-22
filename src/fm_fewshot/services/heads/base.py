@@ -48,6 +48,17 @@ class FewShotHead(ABC):
     ) -> "FewShotHead":
         raise NotImplementedError(f"{cls.__name__} does not implement from_context")
 
+    @property
+    def loss_history(self) -> list[float]:
+        """Per-step training loss; empty for heads with no stepwise training loop.
+
+        The default covers the closed-form and checkpoint-selected heads without
+        touching them. FM heads override this (ADR-024); the loop writes
+        loss_curve.csv only when it is non-empty, so this property alone decides
+        whether the file exists, with no branch on which head produced it.
+        """
+        return []
+
 
 _REGISTRY: dict[str, type[FewShotHead]] = {}
 
