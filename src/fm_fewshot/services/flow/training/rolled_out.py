@@ -13,11 +13,9 @@ and no cross-entropy, temperature or CFM term either: the earlier
 them (ADR-021).
 
 The norm is summed over the feature dimension and only the batch is averaged,
-which is what `|| . ||^2` means. Standard training's `cfm_loss` averages over
-elements instead, so the two schemes' losses differ by a factor of D in scale
-and their learning rates are not directly comparable. That is a real asymmetry
-to settle in the fairness guards, not something to paper over by rewriting his
-formula here.
+which is what `|| . ||^2` means. `cfm_loss` reduces the same way, so the two
+schemes' losses are on one scale, their learning rates mean the same thing and
+their curves can be plotted on one axis.
 
 Training depth is inference depth: `sample_steps` is the only step count and
 T = 4 and T = 12 are two separately trained models (ADR-022).

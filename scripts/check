@@ -19,4 +19,7 @@ uv run ruff check src/ tests/
 echo "==> pytest + coverage"
 uv run pytest tests/ "${markers[@]}"
 
+echo "==> cross-head subsets"
+./scripts/check_subsets
+
 echo "==> all gates passed"

@@ -46,14 +46,37 @@ class TestLinearPath:
 
 
 class TestCfmLoss:
+    """The write-up's reduction: || . ||_2^2 summed over D, averaged over the batch.
+
+    Not a per-element mean. The two differ by a factor of D, which would put
+    the standard and rolled-out loss curves on incomparable axes even though
+    the write-up writes both objectives the same way.
+    """
+
     def test_matches_a_hand_computation(self) -> None:
         x0 = torch.tensor([[0.0, 0.0]])
         x1 = torch.tensor([[2.0, 0.0]])
         t = torch.tensor([0.5])
-        # Field predicts (1, 0); the target is x1 - x0 = (2, 0).
+        # Field predicts (1, 0); the target is u = x1 - x0 = (2, 0).
         field = lambda x, tt: torch.tensor([[1.0, 0.0]])  # noqa: E731
-        # MSE over both components: ((1-2)^2 + (0-0)^2) / 2 = 0.5
-        assert float(cfm_loss(field, x0, x1, t)) == pytest.approx(0.5)
+        # || (1, 0) - (2, 0) ||_2^2 = (-1)^2 + 0^2 = 1, over a batch of one.
+        # A per-element mean would report half of that.
+        assert float(cfm_loss(field, x0, x1, t)) == pytest.approx(1.0)
+
+    def test_sums_over_the_feature_dimension_and_averages_over_the_batch(self) -> None:
+        """Two rows and three dimensions, so the two reductions cannot coincide.
+
+        Targets are x1 - x0 = x1. Row 0's error is (3, -2, 2) - (2, 0, 0) =
+        (1, -2, 2), squared norm 1 + 4 + 4 = 9. Row 1's is (0, 4, 1) -
+        (0, 4, 0) = (0, 0, 1), squared norm 1. Averaged over the batch,
+        (9 + 1) / 2 = 5. A per-element mean would give 10 / 6.
+        """
+        x0 = torch.zeros(2, 3)
+        x1 = torch.tensor([[2.0, 0.0, 0.0], [0.0, 4.0, 0.0]])
+        t = torch.tensor([0.25, 0.75])
+        prediction = torch.tensor([[3.0, -2.0, 2.0], [0.0, 4.0, 1.0]])
+        field = lambda x, tt: prediction  # noqa: E731
+        assert float(cfm_loss(field, x0, x1, t)) == pytest.approx(5.0)
 
     def test_is_zero_when_the_field_is_exact(self) -> None:
         g = torch.Generator().manual_seed(2)
