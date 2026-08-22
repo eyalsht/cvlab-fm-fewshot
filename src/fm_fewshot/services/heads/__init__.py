@@ -12,12 +12,14 @@ from fm_fewshot.services.heads.base import (
     register,
     registered_heads,
 )
+from fm_fewshot.services.heads.fm_rolled import FmRolledHead
 from fm_fewshot.services.heads.fm_standard import FmStandardHead
 from fm_fewshot.services.heads.linear_probe import LinearProbeHead
 from fm_fewshot.services.heads.prototype import PrototypeHead
 
 __all__ = [
     "FewShotHead",
+    "FmRolledHead",
     "FmStandardHead",
     "HeadContext",
     "LinearProbeHead",
