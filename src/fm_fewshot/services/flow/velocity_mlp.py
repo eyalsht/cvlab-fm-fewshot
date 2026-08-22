@@ -1,19 +1,25 @@
-"""Velocity network v_theta(x, t) per PRD_flow_matching_block.
+"""Velocity network v_theta(z, t) per PRD_flow_matching_block.
 
-A small MLP over concat(x, time_embed(t)) with SiLU hidden layers. Small
+A small MLP over the feature and the time, with SiLU hidden layers. Small
 because the whole point of caching features is that the block operates on
 vectors, not images.
 
-Time enters through a sinusoidal embedding rather than as a raw scalar: one
-scalar among hundreds of feature dimensions is easy for the network to ignore,
-and a field that ignores t still trains and still transports, so the failure
-would be silent.
+Two time conditionings (ADR-019). The default is the write-up's: the scalar t
+concatenated to the feature, two hidden layers of width 512. The alternative is
+a sinusoidal embedding, which is what Phase 7 built, because one scalar among
+hundreds of feature dimensions is easy for the network to ignore and a field
+that ignores t still trains and still transports, so the failure would be
+silent. His is what runs; ours is the ablation, and
+test_velocity_mlp asserts a fitted scalar field is not time-invariant rather
+than leaving the risk to argument.
 """
 
 import math
 
 import torch
 from torch import Tensor, nn
+
+TIME_CONDITIONINGS = ("scalar", "sinusoidal")
 
 
 def sinusoidal_time_embedding(t: Tensor, dim: int) -> Tensor:
@@ -32,19 +38,26 @@ class VelocityMLP(nn.Module):
     def __init__(
         self,
         dim: int,
-        hidden_dims: tuple[int, ...] = (256, 256),
+        hidden_dims: tuple[int, ...] = (512, 512),
+        time_conditioning: str = "scalar",
         time_embed_dim: int = 64,
         seed: int = 0,
     ) -> None:
         super().__init__()
+        if time_conditioning not in TIME_CONDITIONINGS:
+            raise ValueError(
+                f"unknown time_conditioning {time_conditioning!r}; "
+                f"expected one of {TIME_CONDITIONINGS}"
+            )
         if time_embed_dim % 2 != 0:
             raise ValueError(f"time_embed_dim must be even, got {time_embed_dim}")
         self.dim = dim
+        self.time_conditioning = time_conditioning
         self.time_embed_dim = time_embed_dim
 
         generator = torch.Generator().manual_seed(seed)
         layers: list[nn.Module] = []
-        width = dim + time_embed_dim
+        width = dim + (1 if time_conditioning == "scalar" else time_embed_dim)
         for hidden in hidden_dims:
             linear = nn.Linear(width, hidden)
             _seeded_init(linear, generator)
@@ -56,8 +69,12 @@ class VelocityMLP(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
-        embedded = sinusoidal_time_embedding(t.to(x.dtype), self.time_embed_dim)
-        return self.net(torch.cat([x, embedded], dim=1))
+        time = t.to(x.dtype)
+        if self.time_conditioning == "scalar":
+            conditioning = time.view(-1, 1)
+        else:
+            conditioning = sinusoidal_time_embedding(time, self.time_embed_dim)
+        return self.net(torch.cat([x, conditioning], dim=1))
 
 
 def _seeded_init(linear: nn.Linear, generator: torch.Generator) -> None:

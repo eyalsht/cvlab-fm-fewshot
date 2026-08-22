@@ -78,7 +78,11 @@ def train_toy_field(
     hidden_dims: tuple[int, ...] = (64, 64),
 ) -> VelocityMLP:
     """Standard CFM training on (example, its class prototype) pairs."""
-    field = VelocityMLP(dim=2, hidden_dims=hidden_dims, time_embed_dim=16, seed=seed)
+    # Scalar conditioning, explicitly: the toy is the smallest thing that runs
+    # what the Stage 2 heads run (ADR-019).
+    field = VelocityMLP(
+        dim=2, hidden_dims=hidden_dims, time_conditioning="scalar", seed=seed
+    )
     if steps == 0:
         return field
 
