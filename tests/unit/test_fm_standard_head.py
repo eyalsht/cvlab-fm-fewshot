@@ -12,11 +12,10 @@ from dataclasses import replace
 
 import pytest
 import torch
-import torch.nn.functional as F  # noqa: N812
+from test_head_contract import make_config, run_head_battery, separable_scenario
+
 from fm_fewshot.services.flow.training.standard import train_standard_field, transport
 from fm_fewshot.services.heads.fm_standard import FmStandardHead
-from tests.unit.test_head_contract import make_config, run_head_battery
-
 from fm_fewshot.services.heads.prototype import PrototypeHead
 
 
@@ -46,17 +45,7 @@ def fast_config(**overrides: object):
 
 class TestContract:
     def test_battery(self) -> None:
-        train_x, train_y, query_x, query_y = separable_problem()
-        run_head_battery(
-            fast_config(),
-            n_classes=3,
-            train_x=train_x,
-            train_y=train_y,
-            val_x=train_x,
-            val_y=train_y,
-            query_x=query_x,
-            expected_labels=query_y,
-        )
+        run_head_battery(fast_config(), 3, *separable_scenario())
 
     @pytest.mark.parametrize("sample_steps", [4, 12])
     def test_logits_are_finite_at_both_step_counts(self, sample_steps: int) -> None:
@@ -183,15 +172,30 @@ class TestTraining:
 
 
 class TestTransportGeometry:
-    def test_transport_moves_test_points_toward_their_own_prototype(self) -> None:
-        train_x, train_y, query_x, query_y = separable_problem()
-        head = FmStandardHead.from_context(fast_config(n_train_steps=600), 3, context=None)
+    def test_transport_lands_training_points_on_their_own_prototype(self) -> None:
+        """A fit check on the pairs the loss saw, not a claim about test points.
+
+        Whether transport helps on unseen features is the question Stage 2
+        exists to answer, so it is measured in the grid and not asserted here
+        (testing policy: invariants, not accuracy numbers).
+
+        The probe is the endpoint distance, not cosine. These features have
+        norm 6 and the prototypes are unit norm, so cosine to the right
+        prototype starts near 0.99 and has nowhere to go; the distance the
+        objective actually minimizes starts at 5 and is the quantity that
+        moves. That gap between the two measures is the ADR-018 raw-scale
+        concern showing up at toy scale.
+        """
+        train_x, train_y, _, _ = separable_problem()
+        head = FmStandardHead.from_context(
+            fast_config(n_train_steps=1500, hidden_dims=[128, 128]), 3, context=None
+        )
         head.fit(train_x, train_y, train_x, train_y)
 
-        targets = head.prototypes[query_y]
-        before = F.cosine_similarity(query_x, targets).mean()
-        after = F.cosine_similarity(head.transport(query_x), targets).mean()
-        assert float(after) > float(before)
+        targets = head.prototypes[train_y]
+        before = float((train_x - targets).norm(dim=1).mean())
+        after = float((head.transport(train_x) - targets).norm(dim=1).mean())
+        assert after < 0.1 * before
 
     def test_the_trajectory_starts_at_the_query_and_ends_where_transport_lands(self) -> None:
         train_x, train_y, query_x, _ = separable_problem()
