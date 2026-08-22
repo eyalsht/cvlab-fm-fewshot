@@ -1,6 +1,7 @@
-"""Linear path, CFM objective, and velocity MLP per PRD_flow_matching_block."""
+"""Linear path and the CFM objective per PRD_flow_matching_block.
 
-import math
+The velocity network itself is tested in test_velocity_mlp.
+"""
 
 import pytest
 import torch
@@ -81,38 +82,6 @@ class TestCfmLoss:
         assert torch.allclose(seen["x"], torch.tensor([[1.0, 0.0]]))
 
 
-class TestVelocityMlp:
-    def test_output_shape_equals_input_shape(self) -> None:
-        net = VelocityMLP(dim=6, hidden_dims=(16, 16), time_embed_dim=8, seed=0)
-        x = torch.randn(5, 6)
-        t = torch.rand(5)
-        assert net(x, t).shape == (5, 6)
-
-    def test_same_seed_gives_identical_initialization(self) -> None:
-        a = VelocityMLP(dim=4, hidden_dims=(8,), time_embed_dim=4, seed=7)
-        b = VelocityMLP(dim=4, hidden_dims=(8,), time_embed_dim=4, seed=7)
-        x, t = torch.randn(3, 4), torch.rand(3)
-        assert torch.equal(a(x, t), b(x, t))
-
-    def test_different_seeds_differ(self) -> None:
-        a = VelocityMLP(dim=4, hidden_dims=(8,), time_embed_dim=4, seed=0)
-        b = VelocityMLP(dim=4, hidden_dims=(8,), time_embed_dim=4, seed=1)
-        x, t = torch.randn(3, 4), torch.rand(3)
-        assert not torch.equal(a(x, t), b(x, t))
-
-    def test_time_actually_changes_the_output(self) -> None:
-        """A field that ignores t would silently be time-independent."""
-        net = VelocityMLP(dim=3, hidden_dims=(16,), time_embed_dim=8, seed=0)
-        x = torch.randn(4, 3)
-        early = net(x, torch.zeros(4))
-        late = net(x, torch.ones(4))
-        assert not torch.allclose(early, late)
-
-    def test_odd_time_embed_dim_raises(self) -> None:
-        with pytest.raises(ValueError, match="even"):
-            VelocityMLP(dim=3, hidden_dims=(8,), time_embed_dim=7, seed=0)
-
-
 class TestSinglePairConvergence:
     def test_trained_field_recovers_the_conditional_target(self) -> None:
         """One (x0, x1) pair: the optimum is the constant field x1 - x0."""
@@ -170,30 +139,3 @@ class TestSinglePairConvergence:
             loss.backward()
             optimizer.step()
         assert float(loss.detach()) < first
-
-
-class TestSinusoidalEmbedding:
-    def test_embedding_is_bounded_and_finite(self) -> None:
-        from fm_fewshot.services.flow.velocity_mlp import sinusoidal_time_embedding
-
-        t = torch.linspace(0.0, 1.0, 17)
-        embedded = sinusoidal_time_embedding(t, 16)
-        assert embedded.shape == (17, 16)
-        assert torch.isfinite(embedded).all()
-        assert float(embedded.abs().max()) <= 1.0 + 1e-6
-
-    def test_distinct_times_get_distinct_embeddings(self) -> None:
-        from fm_fewshot.services.flow.velocity_mlp import sinusoidal_time_embedding
-
-        embedded = sinusoidal_time_embedding(torch.tensor([0.0, 0.5, 1.0]), 16)
-        assert not torch.allclose(embedded[0], embedded[1])
-        assert not torch.allclose(embedded[1], embedded[2])
-
-    def test_t_zero_is_the_canonical_pattern(self) -> None:
-        from fm_fewshot.services.flow.velocity_mlp import sinusoidal_time_embedding
-
-        embedded = sinusoidal_time_embedding(torch.zeros(1), 8)
-        # sin(0) = 0 for the first half, cos(0) = 1 for the second.
-        assert torch.allclose(embedded[0, :4], torch.zeros(4), atol=1e-6)
-        assert torch.allclose(embedded[0, 4:], torch.ones(4), atol=1e-6)
-        assert math.isclose(float(embedded.sum()), 4.0, abs_tol=1e-5)
