@@ -35,6 +35,16 @@ def expected_runs(head: str, k: int | None) -> int:
     return 3
 
 
+def method_label(cfg: dict) -> str:
+    """What the table calls this run: the head, plus its variant when it has one.
+
+    Two configurations of one head are two methods as far as the protocol is
+    concerned, so they are two cells and two rows.
+    """
+    variant = cfg.get("variant", "")
+    return f"{cfg['head']}@{variant}" if variant else cfg["head"]
+
+
 def _k_label(k: int | None) -> str:
     return "full" if k is None else str(k)
 
@@ -51,7 +61,7 @@ def load_cells(results_dir: Path, *, require_complete: bool = True) -> list[Cell
             continue  # half-written or unrelated directory
         payload = json.loads(summary_path.read_text(encoding="utf-8"))
         cfg = payload["config"]
-        key: CellKey = (cfg["dataset"], cfg["encoder"], cfg["head"], cfg["k"])
+        key: CellKey = (cfg["dataset"], cfg["encoder"], method_label(cfg), cfg["k"])
         grouped.setdefault(key, []).append((payload["run_id"], payload["test_top1"]))
 
     cells: list[CellSummary] = []

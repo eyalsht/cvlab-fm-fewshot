@@ -1,0 +1,45 @@
+# Stage 2, standard FM training, expanded by services/evaluation/sweep.py.
+#
+# Same datasets, encoders, K and seeds as stage1.yaml, because the write-up
+# requires the FM rows to be directly comparable with their Stage 1 baseline.
+# The seed count per cell still comes from the protocol, not from this file.
+#
+# Two variants, not two heads: the write-up evaluates T in {4, 12}, and one
+# head at two step counts has to reach the table as two rows. Standard training
+# never reads the step count, so the two variants at one setting train the same
+# field and differ only in how finely it is integrated at inference (ADR-023).
+
+datasets:
+  - dtd
+  - fgvc_aircraft
+
+encoders:
+  resnet18:
+    - dtd
+    - fgvc_aircraft
+  dinov2_vits14:
+    - fgvc_aircraft
+
+ks:
+  - 5
+  - 10
+  - full
+
+# The training choices the write-up says to hold fixed when comparing the two
+# schemes. Every value here appears identically in stage2_rolled.yaml; if one
+# moves, both move.
+variants:
+  - label: T4
+    head: fm_standard
+    head_params: &stage2_training
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+  - label: T12
+    head: fm_standard
+    head_params:
+      <<: *stage2_training
+      sample_steps: 12

@@ -33,6 +33,11 @@ class ExperimentConfig:
     encoder: str  # "resnet18" | "dinov2_vits14"
     head: str  # registry key
     head_params: dict[str, object] = field(default_factory=dict)
+    # Distinguishes two configurations of one head, e.g. the same FM head at
+    # T = 4 and at T = 12. Empty when a head has only one configuration in the
+    # protocol. It labels the run and the table cell; without it two step
+    # counts would aggregate into one cell.
+    variant: str = ""
     k: int | None = 5  # None -> the full official train split
     # Two seed streams, kept apart so the full setting's three initialization
     # seeds vary the classifier while the training subset stays fixed.

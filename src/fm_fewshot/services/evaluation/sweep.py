@@ -24,30 +24,41 @@ def grid(
     heads: list[str],
     ks: list[int | None],
     head_params: dict[str, dict] | None = None,
+    variants: list[dict] | None = None,
 ) -> list[ExperimentConfig]:
     """Expand the protocol into one config per run.
 
     encoders maps an encoder name to the datasets it runs on, because the
     write-up puts ResNet-18 on both datasets and DINOv2 on only one.
+
+    A method is either a plain head from `heads`, or a variant: one head with a
+    label and its own parameters, which is how Stage 2 runs the same FM head at
+    two step counts without the two collapsing into one table cell.
     """
     head_params = head_params or {}
+    methods = [(head, "", dict(head_params.get(head, {}))) for head in heads]
+    for spec in variants or []:
+        methods.append((spec["head"], spec["label"], dict(spec.get("head_params", {}))))
+
     configs: list[ExperimentConfig] = []
     for dataset in datasets:
         for encoder, encoder_datasets in encoders.items():
             if dataset not in encoder_datasets:
                 continue
-            for head in heads:
+            for head, variant, params in methods:
                 for k in ks:
                     for seed in SEEDS[: expected_runs(head, k)]:
                         subset_seed, init_seed = (0, seed) if k is None else (seed, 0)
                         label = "full" if k is None else str(k)
+                        tag = f"{head}-{variant}" if variant else head
                         configs.append(
                             ExperimentConfig(
-                                run_name=f"{dataset}-{encoder}-{head}-k{label}-s{seed}",
+                                run_name=f"{dataset}-{encoder}-{tag}-k{label}-s{seed}",
                                 dataset=dataset,
                                 encoder=encoder,
                                 head=head,
-                                head_params=dict(head_params.get(head, {})),
+                                head_params=params,
+                                variant=variant,
                                 k=k,
                                 subset_seed=subset_seed,
                                 init_seed=init_seed,
@@ -61,9 +72,10 @@ def load_grid(path: Path) -> list[ExperimentConfig]:
     return grid(
         datasets=raw["datasets"],
         encoders=raw["encoders"],
-        heads=raw["heads"],
+        heads=raw.get("heads", []),
         ks=[None if k in ("full", None) else int(k) for k in raw["ks"]],
         head_params=raw.get("head_params"),
+        variants=raw.get("variants"),
     )
 
 
