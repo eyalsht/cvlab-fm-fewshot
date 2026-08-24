@@ -15,9 +15,13 @@
 *.mp4
 *.wav
 
-# data and experiment artifacts (repo root only; src packages are unaffected)
+# data and experiment artifacts (repo root only; src packages are unaffected).
+# No trailing slash on the run stores: both are symlinks into the private docs
+# repo, which holds the canonical copy so runs survive a machine, and git does
+# not match a symlink against a directory-only pattern.
 /data/
-/results/
+/results
+/ablations
 
 # python
 .venv/
