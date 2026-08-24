@@ -1,4 +1,5 @@
-"""Public API surface: build_features, run_experiment, run_sweep, the figures.
+"""Public API surface: build_features, run_experiment, run_sweep, the figures,
+run_reverse.
 
 The only import surface for notebooks and the CLI.
 """
@@ -8,6 +9,7 @@ from pathlib import Path
 from fm_fewshot.services.evaluation.loop import run_experiment
 from fm_fewshot.services.evaluation.make_figures import make_figures
 from fm_fewshot.services.evaluation.make_stage2_figures import make_stage2_figures
+from fm_fewshot.services.evaluation.reverse_run import run_reverse
 from fm_fewshot.services.evaluation.sweep import run_sweep
 from fm_fewshot.services.features import cache
 from fm_fewshot.services.features.encoders import load_encoder
@@ -17,6 +19,7 @@ __all__ = [
     "make_figures",
     "make_stage2_figures",
     "run_experiment",
+    "run_reverse",
     "run_sweep",
 ]
 

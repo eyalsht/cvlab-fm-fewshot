@@ -193,11 +193,18 @@ uv run python -m fm_fewshot sweep --config config/stage1.yaml
 uv run python -m fm_fewshot report
 uv run python -m fm_fewshot figures --config config/figures.yaml
 uv run python scripts/toy_transport_figure.py
+
+# 4. Optional Stage 2 diagnostics: integrate one run's field backwards
+uv run python -m fm_fewshot reverse --config results/<run_id>/config.yaml
 ```
 
 > [!NOTE]
 > `report` **refuses** to emit a cell holding fewer runs than the protocol requires. Averaging two runs where the
 > protocol wants three would silently produce a number nobody could reproduce from the stated protocol.
+
+> [!NOTE]
+> `reverse` writes `results/<run_id>/reverse.json` and nothing else. Its numbers are diagnostics: they read the true
+> test labels, so by rule they never inform a head configuration and never appear in `TABLE.md`.
 
 ---
 
