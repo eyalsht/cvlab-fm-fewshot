@@ -226,6 +226,40 @@ class TestLossCurve:
         assert with_val.test_top1 == without_val.test_top1
 
 
+class TestSelectedCheckpoint:
+    """best_epoch in summary.json, for a head that selects on steps (ADR-028).
+
+    The linear probe has always filled this field with an epoch. The FM heads
+    train in steps and now select on validation accuracy too, so the field
+    carries the step whose field was kept, and stays None when a run turns
+    selection off.
+    """
+
+    FM_PARAMS = {
+        "n_train_steps": 6,
+        "eval_every": 2,
+        "sample_steps": 2,
+        "hidden_dims": [8, 8],
+        "batch_size": 4,
+    }
+
+    def _run(self, built_caches: Path, **params) -> dict:
+        summary = sdk.run_experiment(
+            make_config(head="fm_standard", head_params=dict(self.FM_PARAMS, **params)),
+            data_root=built_caches,
+            results_dir=built_caches / "results",
+        )
+        return json.loads(
+            (built_caches / "results" / summary.run_id / "summary.json").read_text()
+        )
+
+    def test_the_selected_step_reaches_summary_json(self, built_caches: Path) -> None:
+        assert self._run(built_caches)["best_epoch"] in (2, 4, 6)
+
+    def test_no_step_is_reported_when_selection_is_off(self, built_caches: Path) -> None:
+        assert self._run(built_caches, eval_every=0)["best_epoch"] is None
+
+
 class TestTestSplitDiscipline:
     def test_head_is_fitted_only_on_the_subset(self, built_caches: Path) -> None:
         """K=2 over 3 classes is 6 rows, never the 30-row train split."""
