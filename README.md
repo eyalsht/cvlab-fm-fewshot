@@ -196,6 +196,9 @@ uv run python scripts/toy_transport_figure.py
 
 # 4. Optional Stage 2 diagnostics: integrate one run's field backwards
 uv run python -m fm_fewshot reverse --config results/<run_id>/config.yaml
+
+# 5. Feature-scale diagnostics for one Stage 2 run: norms, residuals, cosines
+uv run python -m fm_fewshot diagnose --config results/<run_id>/config.yaml
 ```
 
 > [!NOTE]
@@ -205,6 +208,12 @@ uv run python -m fm_fewshot reverse --config results/<run_id>/config.yaml
 > [!NOTE]
 > `reverse` writes `results/<run_id>/reverse.json` and nothing else. Its numbers are diagnostics: they read the true
 > test labels, so by rule they never inform a head configuration and never appear in `TABLE.md`.
+
+> [!NOTE]
+> `diagnose` writes `results/<run_id>/diagnostics.json` under the same rule: the distribution of `||z||`, the residual
+> `||z_T - p_y||` on train and test, `cos(z_T, p_y)`, and the pairwise cosine among transported test points, each as a
+> median and an interquartile range. It exists to say whether raw feature scale conditioned badly, and its answer goes
+> to a note, never to `TABLE.md`.
 
 ---
 

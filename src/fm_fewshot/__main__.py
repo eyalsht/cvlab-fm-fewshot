@@ -1,4 +1,4 @@
-"""Command-line dispatch: features | run | sweep | report | figures | reverse.
+"""Command-line dispatch: features | run | sweep | report | figures | reverse | diagnose.
 
 Thin argument parsing only; behavior lives behind the sdk.
 """
@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 from fm_fewshot import sdk
+from fm_fewshot.services.evaluation.scale_diagnostics import DEFAULT_MAX_POINTS
 from fm_fewshot.shared.gatekeeper import HeavyJobOnCpuError
 
 
@@ -62,6 +63,21 @@ def _reverse_parser(subparsers) -> None:  # noqa: ANN001
     p.add_argument("--n-hutchinson", type=int, default=1)
 
 
+def _diagnose_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser(
+        "diagnose", help="ADR-018 feature-scale diagnostics for a Stage 2 run (never in TABLE.md)"
+    )
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help="the stored run to annotate; found from the config when omitted",
+    )
+    p.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
+
+
 def _report_parser(subparsers) -> None:  # noqa: ANN001
     p = subparsers.add_parser("report", help="regenerate results/TABLE.md")
     p.add_argument("--results-dir", type=Path, default=Path("results"))
@@ -97,6 +113,7 @@ def main(argv: list[str] | None = None) -> None:
     _report_parser(subparsers)
     _figures_parser(subparsers)
     _reverse_parser(subparsers)
+    _diagnose_parser(subparsers)
     args = parser.parse_args(argv)
 
     if args.command == "features":
@@ -183,6 +200,22 @@ def main(argv: list[str] | None = None) -> None:
                 data_root=args.data_root,
                 results_dir=args.results_dir,
                 run_id=args.run_id,
+            )
+        except (MissingRunError, NotAnFmRunError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        print(path)
+
+    elif args.command == "diagnose":
+        from fm_fewshot.services.evaluation.reverse_run import MissingRunError, NotAnFmRunError
+        from fm_fewshot.shared.config import load_config
+
+        try:
+            path = sdk.run_diagnostics(
+                load_config(args.config),
+                data_root=args.data_root,
+                results_dir=args.results_dir,
+                run_id=args.run_id,
+                max_points=args.max_points,
             )
         except (MissingRunError, NotAnFmRunError, ValueError) as error:
             raise SystemExit(str(error)) from error
