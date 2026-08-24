@@ -44,6 +44,8 @@ T_VALUES = (4, 12)
 # Small enough that a refit costs milliseconds; the figures do not care how
 # well the field fits, only that the fit is reproducible from the config.
 FM_PARAMS = {"n_train_steps": 4, "batch_size": 8, "hidden_dims": [8, 8]}
+EVAL_EVERY = 2
+SELECTED_STEP = 2
 
 
 class RecordingProjector:
@@ -100,17 +102,19 @@ def _write_run(results_dir: Path, cfg: ExperimentConfig, top1: float) -> None:
     run_dir = results_dir / cfg.run_name
     run_dir.mkdir(parents=True)
     save_config(cfg, run_dir / "config.yaml")
+    payload = {"run_id": cfg.run_name, "config": asdict(cfg), "test_top1": top1}
+    if cfg.head.startswith("fm_"):
+        # The kept step is early and the loss keeps falling past it, which is
+        # the shape the real grid has and the one S7 exists to draw.
+        payload["best_epoch"] = SELECTED_STEP
     (run_dir / "summary.json").write_text(
-        json.dumps(
-            {"run_id": cfg.run_name, "config": asdict(cfg), "test_top1": top1},
-            indent=2,
-            sort_keys=True,
-        ),
-        encoding="utf-8",
+        json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
     if cfg.head.startswith("fm_"):
         rows = ["step,train_loss,val_top1"]
-        rows += [f"{s},{1.0 / s:.6f}," for s in range(1, FM_PARAMS["n_train_steps"] + 1)]
+        for step in range(1, FM_PARAMS["n_train_steps"] + 1):
+            val = f"{0.6 - 0.05 * step:.4f}" if step % EVAL_EVERY == 0 else ""
+            rows.append(f"{step},{1.0 / step:.6f},{val}")
         (run_dir / "loss_curve.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
 
 
@@ -433,6 +437,7 @@ class TestGeneration:
         assert any(name.startswith("stage2_size_curve") for name in names)
         assert any(name.startswith("stage2_loss_curves") for name in names)
         assert any(name.startswith("stage2_features") for name in names)
+        assert any(name.startswith("stage2_selection") for name in names)
         assert sum(name.startswith("stage2_trajectories") for name in names) == 3
         assert all(path.exists() for path in written)
 

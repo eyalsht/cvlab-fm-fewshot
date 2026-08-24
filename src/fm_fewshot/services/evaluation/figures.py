@@ -372,6 +372,111 @@ def plot_stage2_loss_curves(*, curves, title: str, out: Path, dpi: int = 200) ->
     return _save(fig, out)
 
 
+def selection_note(
+    *,
+    steps: list[int],
+    losses: list[float],
+    validation: list[tuple[int, float]],
+    selected_step: int | None,
+) -> str:
+    """What S7 exists to say: which step the run kept, and where the loss bottomed.
+
+    The two are reported together because the interesting fact about this grid
+    is that they disagree. Selection is on validation accuracy (ADR-028), and
+    in every run of the 108 the training loss is still falling at the step the
+    run keeps, so a reader who assumes the kept step is the loss minimum is
+    reading the opposite of what happened.
+    """
+    if not validation or selected_step is None:
+        return "no selection grid recorded; the field is the one the last step left"
+    loss_min_step = steps[losses.index(min(losses))]
+    # The value at the kept step, not the maximum of the curve. They agree when
+    # selection did its job, and when they do not the figure should show it
+    # rather than paper over it with the number the rule was supposed to find.
+    at_kept = dict(validation).get(selected_step)
+    scored = f", val top-1 {at_kept:.3f}" if at_kept is not None else ""
+    kept = f"kept step {selected_step} of {steps[-1]}{scored}"
+    if loss_min_step > selected_step:
+        return f"{kept}; loss still falling, its minimum at step {loss_min_step}"
+    return f"{kept}; loss minimum at step {loss_min_step}"
+
+
+def plot_selection(*, panels, title: str, out: Path, dpi: int = 200) -> Path:
+    """S7. Two rows sharing one x axis per scheme, never a twin y axis.
+
+    A loss spanning three decades and an accuracy in [0, 1] have no common
+    scale. Drawing them against two y axes on one plot would put a crossing
+    point on the page that is an artifact of where the two scales were pinned,
+    and a reader would take it for a fact about the run.
+    """
+    columns = len(panels)
+    fig, axes = plt.subplots(
+        2, columns,
+        figsize=(5.0 * columns, 5.2),
+        dpi=dpi,
+        squeeze=False,
+        sharex="col",
+        gridspec_kw={"height_ratios": [1.35, 1.0]},
+    )
+    for column, panel in enumerate(panels):
+        steps = list(panel["steps"])
+        losses = list(panel["losses"])
+        validation = list(panel["validation"])
+        selected = panel["selected_step"]
+        if selected is not None and not (steps[0] <= selected <= steps[-1]):
+            raise ValueError(
+                f"selected step {selected} is outside the recorded run, "
+                f"steps {steps[0]} to {steps[-1]}; a marker there would "
+                "misdescribe the run rather than annotate it"
+            )
+
+        top, bottom = axes[0][column], axes[1][column]
+        top.plot(steps, losses, linewidth=1.1, color="#333333")
+        top.set_yscale("log")
+        top.set_ylabel("training loss (log)")
+        note = selection_note(
+            steps=steps, losses=losses, validation=validation, selected_step=selected
+        )
+        top.set_title(f"{panel['name']}\n{note}", fontsize=8)
+        top.grid(alpha=0.3)
+
+        if validation:
+            bottom.plot(
+                [step for step, _ in validation],
+                [value for _, value in validation],
+                linewidth=1.1, marker="o", markersize=2.5, color="#0E6F7B",
+            )
+        else:
+            bottom.text(
+                0.5, 0.5, "no validation recorded (eval_every: 0)",
+                ha="center", va="center", fontsize=7, transform=bottom.transAxes,
+            )
+        bottom.set_ylabel("validation top-1")
+        bottom.set_xlabel("training step")
+        bottom.grid(alpha=0.3)
+
+        # One rule through both rows, so the kept step is read at the same x.
+        if selected is not None:
+            for ax in (top, bottom):
+                ax.axvline(selected, color="#A2432C", linewidth=1.0, linestyle="--")
+            bottom.annotate(
+                f"kept step {selected}",
+                xy=(selected, 0), xycoords=("data", "axes fraction"),
+                xytext=(3, 4), textcoords="offset points",
+                fontsize=6, color="#A2432C",
+            )
+
+    fig.suptitle(title, fontsize=10)
+    fig.text(
+        0.5, 0.005,
+        "selection is on validation top-1, not on the loss (ADR-028); the dashed "
+        "rule is the step the run kept",
+        ha="center", fontsize=6,
+    )
+    fig.tight_layout()
+    return _save(fig, out)
+
+
 def _panel_grid(count: int, dpi: int):  # noqa: ANN202 - a matplotlib Figure and Axes
     fig, axes = plt.subplots(1, count, figsize=(4.7 * count, 4.7), dpi=dpi, squeeze=False)
     return fig, axes[0]
@@ -464,6 +569,7 @@ __all__ = [
     "plot_feature_space",
     "plot_loss_curves",
     "plot_size_curve",
+    "plot_selection",
     "plot_stage2_loss_curves",
     "plot_trajectory_panels",
     "project_jointly",

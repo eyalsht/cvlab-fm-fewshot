@@ -308,6 +308,31 @@ def _read_loss_curve(path: Path) -> tuple[list[int], list[float]]:
     return [int(r["step"]) for r in rows], [float(r["train_loss"]) for r in rows]
 
 
+def _read_selection(run_dir: Path) -> dict:
+    """Everything S7 draws for one run, straight from what the run stored.
+
+    `best_epoch` comes from `summary.json` rather than from the validation
+    column's argmax so the marked step is the step the head actually restored,
+    including its tie rule. Recomputing it here would let the figure and the
+    table disagree without either being obviously wrong.
+    """
+    run_dir = Path(run_dir)
+    steps, losses = _read_loss_curve(run_dir / "loss_curve.csv")
+    with (run_dir / "loss_curve.csv").open(encoding="utf-8") as handle:
+        validation = [
+            (int(r["step"]), float(r["val_top1"]))
+            for r in csv.DictReader(handle)
+            if r.get("val_top1")
+        ]
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    return {
+        "steps": steps,
+        "losses": losses,
+        "validation": validation,
+        "selected_step": summary.get("best_epoch"),
+    }
+
+
 def _needed_steps(head: str, feature_t: int, t_values) -> list[int]:
     """Which T each scheme has to be refit at.
 
@@ -436,6 +461,20 @@ def make_stage2_figures(
                 curves=curves,
                 title=f"{stem}, K={k_tag}",
                 out=out_dir / f"stage2_loss_curves_{encoder}.png",
+                dpi=dpi,
+            )
+        )
+
+        # S7, why each run stopped where it did. Same runs as S2, no refit.
+        written.append(
+            figures.plot_selection(
+                panels=[
+                    {"name": figures.scheme_label(head, feature_t),
+                     **_read_selection(plan.runs[(head, feature_t)])}
+                    for head in STAGE2_HEADS
+                ],
+                title=f"{stem}, K={k_tag}",
+                out=out_dir / f"stage2_selection_{encoder}.png",
                 dpi=dpi,
             )
         )
