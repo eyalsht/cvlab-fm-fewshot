@@ -14,6 +14,9 @@ What is shared, and asserted here:
   batch size, learning rate and seed. Only the batch-loss callable differs,
   and rolled-out training's depth is closed over in that callable rather than
   passed to the loop.
+- the checkpoint selection. Both hand the loop a ValidationSelector carrying
+  the same validation split, the same prototypes, the same schedule and the
+  same depth, so neither scheme can be selected on easier terms (ADR-028).
 - the optimizer. One Adam, built in `base` and never in a scheme, so its type
   and every default it carries agree.
 - the row draw. One `torch.randint` call in the shared loop, from a generator
@@ -28,9 +31,12 @@ What is not shared, and is asserted here as divergence rather than glossed:
   differs by construction. Nothing here claims otherwise; the guard is that
   the divergence comes from the objective and from nothing else.
 
-The last class in the file is the other half of the same fairness question,
-ADR-023: within standard FM, T = 4 and T = 12 must be one trained field,
-because standard training never reads the step count.
+The last two classes are the other half of the same fairness question, ADR-023
+and its amendment ADR-028: within standard FM, T = 4 and T = 12 are one trained
+field, because standard training never reads the step count, and that stays
+bit-identically true wherever selection is off. Once selection runs, T reaches
+the fit through the selection metric and the two runs may stop at two different
+points of that one trajectory.
 """
 
 import hashlib
@@ -43,7 +49,7 @@ from test_head_contract import make_config
 from fm_fewshot.services.flow.objective import cfm_loss
 from fm_fewshot.services.flow.training import rolled_out as rolled_module
 from fm_fewshot.services.flow.training import standard as standard_module
-from fm_fewshot.services.flow.training.base import train_field
+from fm_fewshot.services.flow.training.base import ValidationSelector, train_field
 from fm_fewshot.services.flow.training.rolled_out import rolled_out_loss
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 from fm_fewshot.services.heads.base import make_head
@@ -110,15 +116,20 @@ class TestIdenticalInitialization:
 
 
 class TestIdenticalLoopArguments:
-    def test_the_two_schemes_hand_the_loop_the_same_everything_but_the_loss(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """Only the batch-loss callable, passed positionally, may differ."""
+    """The two positional arguments past the endpoints are the loss and the selector.
+
+    The loss is the one thing that may differ. The selector may not: it is the
+    same class carrying the same validation split, prototypes, schedule and
+    depth in both schemes, which is checked field by field here because two
+    heads necessarily build two objects (ADR-028).
+    """
+
+    def _recorded(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple]:
         recorded: dict[str, tuple] = {}
 
         def recorder(name: str):
-            def fake_train_field(x0, x1, batch_loss, **kwargs):
-                recorded[name] = (x0, x1, kwargs)
+            def fake_train_field(x0, x1, batch_loss, selector=None, **kwargs):
+                recorded[name] = (x0, x1, selector, kwargs)
                 return VelocityMLP(dim=x0.shape[1], hidden_dims=(4,), seed=0), []
 
             return fake_train_field
@@ -130,16 +141,40 @@ class TestIdenticalLoopArguments:
         standard, rolled = both_heads()
         standard.fit(train_x, train_y, train_x, train_y)
         rolled.fit(train_x, train_y, train_x, train_y)
+        return recorded
 
-        standard_x0, standard_x1, standard_kwargs = recorded["standard"]
-        rolled_x0, rolled_x1, rolled_kwargs = recorded["rolled"]
+    def test_the_two_schemes_hand_the_loop_the_same_everything_but_the_loss(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._recorded(monkeypatch)
+        standard_x0, standard_x1, _, standard_kwargs = recorded["standard"]
+        rolled_x0, rolled_x1, _, rolled_kwargs = recorded["rolled"]
         assert torch.equal(standard_x0, rolled_x0)
         assert torch.equal(standard_x1, rolled_x1)
         assert standard_kwargs == rolled_kwargs
         # The loop is told nothing about T: rolled-out training closes over its
-        # depth inside the loss (ADR-022), so no argument to the shared loop can
-        # carry it and the two argument sets stay comparable.
+        # depth inside the loss (ADR-022), so no keyword argument to the shared
+        # loop can carry it and the two argument sets stay comparable. The
+        # selector carries T because scoring a checkpoint means transporting at
+        # it, and it carries the same T in both schemes.
         assert "sample_steps" not in standard_kwargs
+
+    def test_both_schemes_hand_the_loop_the_same_selection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._recorded(monkeypatch)
+        standard_selector = recorded["standard"][2]
+        rolled_selector = recorded["rolled"][2]
+        assert type(standard_selector) is type(rolled_selector) is ValidationSelector
+        assert standard_selector.eval_every == rolled_selector.eval_every
+        assert standard_selector.sample_steps == rolled_selector.sample_steps
+        assert torch.equal(standard_selector.val_x, rolled_selector.val_x)
+        assert torch.equal(standard_selector.val_y, rolled_selector.val_y)
+        # Same decision rule, not merely the same class of rule: the selector
+        # scores with the head's own fitted PrototypeHead (ADR-020).
+        assert torch.equal(
+            standard_selector.classifier.prototypes, rolled_selector.classifier.prototypes
+        )
 
 
 class TestIdenticalOptimizer:
@@ -259,11 +294,17 @@ class TestStepCountIsNotATrainingAxis:
     """ADR-023: standard training never reads T, so T = 4 and T = 12 are one field.
 
     Standard FM supervises the velocity at points on the ideal path and never
-    solves the ODE, so the step count enters only at inference. The two rows
-    the grid reports for standard FM are therefore one trained model read at
-    two resolutions, and the gap between them measures the curvature of the
-    field rather than any difference in what was fitted. The phase note must
-    not present them as two models.
+    solves the ODE, so the step count enters only at what is done with the
+    field afterwards. The two rows the grid reports for standard FM come from
+    one training trajectory, and the gap between them measures the curvature of
+    the field rather than any difference in what was fitted. The phase note
+    must not present them as two models.
+
+    Scoped to eval_every = 0, and no further. Bit-identity was ADR-023's claim
+    about whole runs; ADR-028 narrows it to the training trajectory, because
+    checkpoint selection scores a field by transporting the validation split at
+    T, so with selection on the two runs can stop at two different points of
+    that one trajectory. The class below is that case.
 
     Asserted as a hash so the same check can be run over the weights a real
     grid writes, not only over two objects held in one process.
@@ -271,7 +312,9 @@ class TestStepCountIsNotATrainingAxis:
 
     def _trained(self, head_type: str, sample_steps: int, steps: int = 25) -> VelocityMLP:
         train_x, train_y = problem()
-        params = dict(SHARED_PARAMS, sample_steps=sample_steps, n_train_steps=steps)
+        params = dict(
+            SHARED_PARAMS, sample_steps=sample_steps, n_train_steps=steps, eval_every=0
+        )
         head = make_head(make_config(head_type, **params), 3)
         head.fit(train_x, train_y, train_x, train_y)
         return head.field
@@ -291,3 +334,62 @@ class TestStepCountIsNotATrainingAxis:
         assert field_hash(self._trained("fm_rolled", 4)) != field_hash(
             self._trained("fm_rolled", 12)
         )
+
+
+class TestStepCountEntersThroughSelection:
+    """ADR-028: with selection on, T decides which checkpoint standard FM keeps.
+
+    The training trajectory is still T-independent. What reads T is the
+    selection metric, since scoring a checkpoint means transporting the
+    validation split at the run's own step count, so the two runs can stop at
+    two different points of the same trajectory and the finished fields then
+    differ. The claim that a finished standard-FM run is bit-identical across T
+    is false wherever eval_every > 0, and this class is what replaces it.
+
+    The problem is deliberately not the separable one used elsewhere in this
+    file: classes overlap, so validation accuracy moves during training instead
+    of saturating on the first evaluation, which is the regime where the choice
+    of checkpoint is a choice at all.
+    """
+
+    PARAMS: dict[str, object] = dict(
+        SHARED_PARAMS, n_train_steps=400, lr=7e-3, eval_every=50
+    )
+
+    @staticmethod
+    def _overlapping(seed: int = 2, spread: float = 2.0):
+        g = torch.Generator().manual_seed(seed)
+        centers = torch.eye(3, 5) * 4.0
+        labels = torch.arange(3).repeat_interleave(4)
+        train_x = centers[labels] + spread * torch.randn(labels.shape[0], 5, generator=g)
+        val_labels = torch.arange(3).repeat_interleave(6)
+        val_x = centers[val_labels] + spread * torch.randn(val_labels.shape[0], 5, generator=g)
+        return train_x, labels, val_x, val_labels
+
+    def _head(self, sample_steps: int, **overrides: object):
+        params = dict(self.PARAMS, sample_steps=sample_steps)
+        params.update(overrides)
+        head = make_head(make_config("fm_standard", **params), 3)
+        head.fit(*self._overlapping())
+        return head
+
+    def test_selection_is_deterministic_at_a_fixed_seed(self) -> None:
+        first, second = self._head(4), self._head(4)
+        assert first.best_epoch == second.best_epoch
+        assert field_hash(first.field) == field_hash(second.field)
+
+    def test_the_two_step_counts_can_keep_different_checkpoints(self) -> None:
+        four, twelve = self._head(4), self._head(12)
+        assert four.best_epoch != twelve.best_epoch
+        assert field_hash(four.field) != field_hash(twelve.field)
+
+    def test_both_kept_fields_lie_on_the_one_training_trajectory(self) -> None:
+        """What survives of ADR-023: T changes where the run stops, not what it fits.
+
+        A run of n steps is the first n steps of a longer run, so each kept
+        field must hash to an unselected fit of exactly best_epoch steps, at
+        either step count.
+        """
+        for head in (self._head(4), self._head(12)):
+            unselected = self._head(4, eval_every=0, n_train_steps=head.best_epoch)
+            assert field_hash(head.field) == field_hash(unselected.field)

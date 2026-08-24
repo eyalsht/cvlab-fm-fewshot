@@ -18,6 +18,7 @@ phase note must not report the two T values as one axis.
 
 from torch import Tensor
 
+from fm_fewshot.services.flow.training.base import ValidationSelector
 from fm_fewshot.services.flow.training.rolled_out import train_rolled_out_field
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 from fm_fewshot.services.heads.base import HeadContext, register
@@ -53,10 +54,13 @@ class FmRolledHead(FmHead):
             **cls.shared_params(cfg, n_classes),
         )
 
-    def _fit_field(self, train_x: Tensor, targets: Tensor) -> tuple[VelocityMLP, list[float]]:
+    def _fit_field(
+        self, train_x: Tensor, targets: Tensor, selector: ValidationSelector
+    ) -> tuple[VelocityMLP, list[float]]:
         return train_rolled_out_field(
             train_x,
             targets,
+            selector,
             sample_steps=self._sample_steps,
             hidden_dims=self._hidden_dims,
             time_conditioning=self._time_conditioning,

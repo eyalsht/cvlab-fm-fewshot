@@ -20,6 +20,7 @@ from torch import Tensor
 
 from fm_fewshot.services.flow.objective import cfm_loss
 from fm_fewshot.services.flow.training.base import (
+    ValidationSelector,
     train_field,
     transport,
     transport_trajectory,
@@ -32,6 +33,7 @@ __all__ = ["train_standard_field", "transport", "transport_trajectory"]
 def train_standard_field(
     x0: Tensor,
     x1: Tensor,
+    selector: ValidationSelector | None = None,
     *,
     hidden_dims: tuple[int, ...] = (512, 512),
     time_conditioning: str = "scalar",
@@ -52,6 +54,7 @@ def train_standard_field(
         x0,
         x1,
         batch_loss,
+        selector,
         hidden_dims=hidden_dims,
         time_conditioning=time_conditioning,
         n_train_steps=n_train_steps,

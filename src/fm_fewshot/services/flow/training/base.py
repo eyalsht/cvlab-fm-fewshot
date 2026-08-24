@@ -15,9 +15,15 @@ way, so the schemes agree on the first batch and the comparison starts fair.
 The optimizer is ours, not his: he asks only for stable training, so Adam at
 1e-3 carries over from the Phase 7 toy and every setting of it is a config
 field recorded in the run.
+
+Checkpoint selection lives here for the same reason the loop does. It is one
+class, constructed by the head and driven by the shared loop, so neither scheme
+can be selected on a different rule, a different split or a different schedule
+than the other (ADR-028).
 """
 
 from collections.abc import Callable
+from typing import Protocol
 
 import torch
 from torch import Tensor
@@ -28,10 +34,110 @@ from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 BatchLoss = Callable[[VelocityMLP, Tensor, Tensor, torch.Generator], Tensor]
 
 
+class Classifier(Protocol):
+    """What the selector needs of a decision rule: logits from features.
+
+    Typed structurally so this module keeps knowing nothing about heads. In
+    Stage 2 the object passed is the head's own fitted PrototypeHead, which is
+    what makes the selection metric the metric the run reports (ADR-020).
+    """
+
+    def predict(self, query_x: Tensor) -> Tensor: ...
+
+
+class ValidationSelector:
+    """Keep the field that scored best on the validation split (ADR-028).
+
+    Every `eval_every` optimizer steps the current field transports `val_x` at
+    the run's own `sample_steps` and the fitted classifier scores where it
+    lands. The best-scoring state dict is held in memory and restored into the
+    field when training ends, so the head predicts with the checkpoint that was
+    selected rather than the one training happened to stop on.
+
+    `eval_every = 0` disables the mechanism entirely: nothing is evaluated,
+    nothing is recorded, nothing is restored, and the fit is bit-identical to
+    the one this repository ran before selection existed.
+
+    Two properties the fairness of the comparison rests on. Selection never
+    touches the training RNG stream, the weights or the optimizer, so the loss
+    curve of a selected run is the curve of the unselected run. And a tie keeps
+    the earlier step, the rule the linear probe has used since ADR-014.
+
+    The step numbers recorded are 1-based, matching the rows of
+    `loss_curve.csv`, which is where the loop writes them.
+    """
+
+    def __init__(
+        self,
+        val_x: Tensor,
+        val_y: Tensor,
+        classifier: Classifier,
+        *,
+        sample_steps: int,
+        eval_every: int,
+    ) -> None:
+        if eval_every < 0:
+            raise ValueError(f"eval_every must be >= 0, got {eval_every}")
+        self.val_x = val_x
+        self.val_y = val_y
+        self.classifier = classifier
+        self.sample_steps = sample_steps
+        self.eval_every = eval_every
+        self._history: list[tuple[int, float]] = []
+        self._best_step: int | None = None
+        self._best_accuracy = -1.0
+        self._best_state: dict[str, Tensor] | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.eval_every > 0
+
+    @property
+    def history(self) -> list[tuple[int, float]]:
+        """(step, val top-1) on the evaluation grid, for the loss_curve.csv column."""
+        return list(self._history)
+
+    @property
+    def best_step(self) -> int | None:
+        """The step whose field was kept; None when nothing was selected."""
+        return self._best_step
+
+    def observe(self, step: int, field: VelocityMLP) -> None:
+        """Score the field at `step` if it falls on the grid, and keep it if it wins."""
+        if not self.enabled or step % self.eval_every:
+            return
+        accuracy = self._accuracy(field)
+        self._history.append((step, accuracy))
+        # Strictly greater keeps the earlier step on a tie (ADR-014).
+        if accuracy > self._best_accuracy:
+            self._best_accuracy = accuracy
+            self._best_step = step
+            self._best_state = {
+                name: tensor.detach().clone() for name, tensor in field.state_dict().items()
+            }
+
+    def restore(self, field: VelocityMLP) -> None:
+        """Put the selected weights back into the field. A no-op if none were kept."""
+        if self._best_state is not None:
+            field.load_state_dict(self._best_state)
+
+    def _accuracy(self, field: VelocityMLP) -> float:
+        was_training = field.training
+        field.eval()
+        try:
+            with torch.no_grad():
+                landed = transport(field, self.val_x, sample_steps=self.sample_steps)
+                predicted = self.classifier.predict(landed).argmax(dim=1)
+        finally:
+            field.train(was_training)
+        return float((predicted == self.val_y).float().mean())
+
+
 def train_field(
     x0: Tensor,
     x1: Tensor,
     batch_loss: BatchLoss,
+    selector: ValidationSelector | None = None,
     *,
     hidden_dims: tuple[int, ...] = (512, 512),
     time_conditioning: str = "scalar",
@@ -40,7 +146,15 @@ def train_field(
     lr: float = 1e-3,
     init_seed: int = 0,
 ) -> tuple[VelocityMLP, list[float]]:
-    """Fit v_theta on the paired coupling (x0[i] -> x1[i]); return it and its loss curve."""
+    """Fit v_theta on the paired coupling (x0[i] -> x1[i]); return it and its loss curve.
+
+    `selector` is passed positionally, next to the loss, because those two are
+    the only arguments that carry anything scheme-specific: the loss is the
+    objective, the selector is the validation split and the depth to score at.
+    Everything after them is the training configuration both schemes share.
+    With no selector, or one built with `eval_every = 0`, the field returned is
+    the field the last optimizer step left.
+    """
     if x0.shape != x1.shape:
         raise ValueError(
             "paired endpoints must match in shape, got "
@@ -75,7 +189,12 @@ def train_field(
         loss.backward()
         optimizer.step()
         history.append(float(loss.detach()))
+        if selector is not None:
+            # 1-based, so the step numbering agrees with loss_curve.csv.
+            selector.observe(step + 1, field)
 
+    if selector is not None:
+        selector.restore(field)
     return field, history
 
 

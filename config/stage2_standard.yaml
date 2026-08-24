@@ -38,6 +38,9 @@ variants:
       lr: 1.0e-3
       hidden_dims: [512, 512]
       time_conditioning: scalar
+      # Checkpoint selection on validation accuracy, every 50 steps (ADR-028).
+      # 0 restores the fixed-schedule behaviour that kept the final field.
+      eval_every: 50
   - label: T12
     head: fm_standard
     head_params:

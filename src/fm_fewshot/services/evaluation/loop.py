@@ -116,8 +116,15 @@ def run_experiment(
 
 
 def _trains(head) -> bool:  # noqa: ANN001 - duck-typed head
-    """True for heads that record epochs, so closed-form heads report None."""
-    return bool(getattr(head, "epochs", []))
+    """True for heads that selected a checkpoint, so closed-form heads report None.
+
+    Two shapes of evidence because the two trainers count differently: the
+    linear probe selects on epochs and records EpochRecords, the FM heads
+    select on steps and record a val_top1 history (ADR-028). Either way the
+    number in best_epoch is the checkpoint the head kept, and a head that
+    selected nothing reports None.
+    """
+    return bool(getattr(head, "epochs", [])) or bool(getattr(head, "val_top1_history", []))
 
 
 def _write_results(

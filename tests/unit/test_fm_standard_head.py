@@ -160,11 +160,18 @@ class TestTraining:
         """ADR-023 in miniature: standard training never solves the ODE.
 
         T=4 and T=12 are therefore the same field read at two resolutions, and
-        the phase note must not report them as two models.
+        the phase note must not report them as two models. Scoped to
+        eval_every=0, because checkpoint selection scores the field by
+        transporting at T and so can keep a different step at each T (ADR-028);
+        test_scheme_parity.py carries both halves of that.
         """
         train_x, train_y, query_x, _ = separable_problem()
-        four = FmStandardHead.from_context(fast_config(sample_steps=4), 3, context=None)
-        twelve = FmStandardHead.from_context(fast_config(sample_steps=12), 3, context=None)
+        four = FmStandardHead.from_context(
+            fast_config(sample_steps=4, eval_every=0), 3, context=None
+        )
+        twelve = FmStandardHead.from_context(
+            fast_config(sample_steps=12, eval_every=0), 3, context=None
+        )
         four.fit(train_x, train_y, train_x, train_y)
         twelve.fit(train_x, train_y, train_x, train_y)
         for a, b in zip(four.field.parameters(), twelve.field.parameters(), strict=True):
@@ -186,10 +193,16 @@ class TestTransportGeometry:
         objective actually minimizes starts at 5 and is the quantity that
         moves. That gap between the two measures is the ADR-018 raw-scale
         concern showing up at toy scale.
+
+        Selection is off here because the question is where the fit converges
+        to, not which checkpoint validation prefers: this toy is solved by the
+        prototype rule alone, so validation accuracy saturates on the first
+        evaluation and selection keeps a barely trained field (ADR-028). What
+        selection does is asserted in test_fm_val_selection.py.
         """
         train_x, train_y, _, _ = separable_problem()
         head = FmStandardHead.from_context(
-            fast_config(n_train_steps=1500, hidden_dims=[128, 128]), 3, context=None
+            fast_config(n_train_steps=1500, hidden_dims=[128, 128], eval_every=0), 3, context=None
         )
         head.fit(train_x, train_y, train_x, train_y)
 

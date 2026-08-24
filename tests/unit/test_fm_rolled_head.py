@@ -407,8 +407,11 @@ class TestTraining:
         there and not asserted here.
         """
         train_x, train_y, _, _ = separable_problem()
+        # Selection off: the claim is about where the fit converges to, and on
+        # a toy the prototype rule already solves, validation accuracy
+        # saturates immediately and selection keeps an early field (ADR-028).
         head = FmRolledHead.from_context(
-            fast_config(n_train_steps=800, hidden_dims=[128, 128]), 3, context=None
+            fast_config(n_train_steps=800, hidden_dims=[128, 128], eval_every=0), 3, context=None
         )
         head.fit(train_x, train_y, train_x, train_y)
         targets = head.prototypes[train_y]

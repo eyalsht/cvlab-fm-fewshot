@@ -9,6 +9,7 @@ resolutions (ADR-023).
 
 from torch import Tensor
 
+from fm_fewshot.services.flow.training.base import ValidationSelector
 from fm_fewshot.services.flow.training.standard import train_standard_field
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 from fm_fewshot.services.heads.base import HeadContext, register
@@ -24,10 +25,13 @@ class FmStandardHead(FmHead):
     ) -> "FmStandardHead":
         return cls(**cls.shared_params(cfg, n_classes))
 
-    def _fit_field(self, train_x: Tensor, targets: Tensor) -> tuple[VelocityMLP, list[float]]:
+    def _fit_field(
+        self, train_x: Tensor, targets: Tensor, selector: ValidationSelector
+    ) -> tuple[VelocityMLP, list[float]]:
         return train_standard_field(
             train_x,
             targets,
+            selector,
             hidden_dims=self._hidden_dims,
             time_conditioning=self._time_conditioning,
             n_train_steps=self._n_train_steps,

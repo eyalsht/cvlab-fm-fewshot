@@ -35,7 +35,11 @@ from torch import Tensor
 from torch.utils.checkpoint import checkpoint
 
 from fm_fewshot.services.flow.solver import VelocityField
-from fm_fewshot.services.flow.training.base import train_field, transport
+from fm_fewshot.services.flow.training.base import (
+    ValidationSelector,
+    train_field,
+    transport,
+)
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 
 
@@ -63,6 +67,7 @@ def rolled_out_loss(
 def train_rolled_out_field(
     x0: Tensor,
     x1: Tensor,
+    selector: ValidationSelector | None = None,
     *,
     sample_steps: int,
     hidden_dims: tuple[int, ...] = (512, 512),
@@ -93,6 +98,7 @@ def train_rolled_out_field(
         x0,
         x1,
         batch_loss,
+        selector,
         hidden_dims=hidden_dims,
         time_conditioning=time_conditioning,
         n_train_steps=n_train_steps,
