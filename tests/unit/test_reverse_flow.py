@@ -24,8 +24,8 @@ from fm_fewshot.services.flow.reverse import (
     cycle_relative_error,
     integrate_segment,
     log_volume_change,
-    meet_gaps,
     median_iqr,
+    meet_gaps,
     residual_sigma,
 )
 from fm_fewshot.services.flow.solver import solve_ode
@@ -33,6 +33,33 @@ from fm_fewshot.services.flow.toy import make_toy_problem, train_toy_field
 from fm_fewshot.services.flow.training.standard import train_standard_field
 
 METHODS = ("euler", "midpoint")
+
+
+@pytest.fixture(scope="module")
+def one_pair():
+    """One pair trained to convergence: no conflicting conditional target
+    anywhere, so the learned field should reproduce the interpolant."""
+    z = torch.tensor([[1.5, -0.5]])
+    p = torch.tensor([[-1.0, 2.0]])
+    field, _ = train_standard_field(
+        z.repeat(16, 1),
+        p.repeat(16, 1),
+        hidden_dims=(64, 64),
+        n_train_steps=1500,
+        batch_size=16,
+        lr=1e-2,
+        init_seed=0,
+    )
+    field.eval()
+    return field, z, p
+
+
+@pytest.fixture(scope="module")
+def fitted_toy():
+    problem = make_toy_problem(seed=0, n_classes=3, per_class=128, anisotropy=2.0)
+    field = train_toy_field(problem, seed=0, steps=1200)
+    field.eval()
+    return problem, field
 
 
 def constant_field(c: torch.Tensor):
@@ -154,9 +181,38 @@ class TestKnownContractionControl:
     rather than as solver error."""
 
     @pytest.mark.parametrize(("method", "expected_order"), [("euler", 1.0), ("midpoint", 2.0)])
-    def test_measured_order_matches_the_method(
+    def test_the_return_leg_converges_at_the_method_order(
         self, method: str, expected_order: float
     ) -> None:
+        """The reverse leg against the exact backward flow. x(1) = x0 exp(-a)
+        is known in closed form, so integrating it back to t = 0 has the
+        method's ordinary global error and nothing else."""
+        x0 = torch.full((1, 1), 1.5)
+        a = 1.0
+        field = contraction_field(a)
+        x1 = x0 * math.exp(-a)
+
+        errors = []
+        for n_steps in (4, 8, 16, 32):
+            back = reverse.reverse_transport(field, x1, n_steps=n_steps, method=method)
+            errors.append(float((back - x0).abs().max()))
+
+        orders = [math.log2(errors[i] / errors[i + 1]) for i in range(len(errors) - 1)]
+        measured = sum(orders) / len(orders)
+        assert measured == pytest.approx(expected_order, abs=0.2), orders
+
+    @pytest.mark.parametrize(("method", "least_order"), [("euler", 1.0), ("midpoint", 2.0)])
+    def test_the_round_trip_falls_at_least_at_the_method_order(
+        self, method: str, least_order: float
+    ) -> None:
+        """The round trip, not the single leg. Euler comes in at order 1 as
+        expected; midpoint comes in at 3, not 2, because on a linear field the
+        forward and backward steps are (1 - ah + (ah)^2/2) and
+        (1 + ah + (ah)^2/2), whose product is 1 + (ah)^4/4, so the leading
+        second-order terms cancel and the composed error is one order better
+        than either leg. The assertion is therefore a floor, which is all the
+        contraction argument needs: what must be true is that solver error
+        falls with T while contraction does not."""
         x0 = torch.full((1, 1), 1.5)
         field = contraction_field(1.0)
 
@@ -174,7 +230,7 @@ class TestKnownContractionControl:
 
         orders = [math.log2(errors[i] / errors[i + 1]) for i in range(len(errors) - 1)]
         measured = sum(orders) / len(orders)
-        assert measured == pytest.approx(expected_order, abs=0.2), orders
+        assert measured > least_order - 0.2, orders
 
     def test_error_falls_monotonically_with_t(self) -> None:
         x0 = torch.full((1, 1), 1.5)
@@ -235,22 +291,6 @@ class TestSinglePairMeeting:
     conditional target anywhere, so the forward and backward states must both
     sit on the true interpolant."""
 
-    @pytest.fixture(scope="class")
-    def one_pair(self):
-        z = torch.tensor([[1.5, -0.5]])
-        p = torch.tensor([[-1.0, 2.0]])
-        field, _ = train_standard_field(
-            z.repeat(16, 1),
-            p.repeat(16, 1),
-            hidden_dims=(64, 64),
-            n_train_steps=1500,
-            batch_size=16,
-            lr=1e-2,
-            init_seed=0,
-        )
-        field.eval()
-        return field, z, p
-
     @pytest.mark.parametrize("t_star", [0.25, 0.5, 0.75])
     def test_both_legs_agree_with_the_interpolant(self, one_pair, t_star: float) -> None:
         field, z, p = one_pair
@@ -271,16 +311,10 @@ class TestBasinOnTheToy:
     geometric, not numerical: the cloud that flows to prototype c sits over
     class c's own points."""
 
-    @pytest.fixture(scope="class")
-    def fitted_toy(self):
-        problem = make_toy_problem(seed=0, n_classes=3, per_class=128, anisotropy=2.0)
-        field = train_toy_field(problem, seed=0, steps=1200)
-        field.eval()
-        return problem, field
-
     def test_sigma_is_derived_from_the_training_residual(self, fitted_toy) -> None:
         problem, field = fitted_toy
-        transported = solve_ode(field, problem.train_x, n_steps=4, method="euler")
+        with torch.no_grad():
+            transported = solve_ode(field, problem.train_x, n_steps=4, method="euler")
         targets = problem.prototypes[problem.train_y]
         sigma = residual_sigma(transported, targets, sigma_scale=1.0)
         expected = float((transported - targets).norm(dim=1).median())
@@ -302,13 +336,17 @@ class TestBasinOnTheToy:
         clouds = basin_samples(
             field, prototypes, sigma=0.0, n_samples=8, n_steps=8, seed=0
         )
+        # Exactly one point in exact arithmetic. The residual is float32
+        # noise: a batched GEMM does not return bit-identical rows even for
+        # bit-identical inputs, measured at 4e-7 per layer on this field.
         for c in range(clouds.shape[0]):
             spread = (clouds[c] - clouds[c].mean(dim=0)).norm(dim=1).max()
-            assert float(spread) < 1e-6
+            assert float(spread) < 1e-4
 
     def test_alignment_is_diagonally_dominant(self, fitted_toy) -> None:
         problem, field = fitted_toy
-        transported = solve_ode(field, problem.train_x, n_steps=4, method="euler")
+        with torch.no_grad():
+            transported = solve_ode(field, problem.train_x, n_steps=4, method="euler")
         sigma = residual_sigma(transported, problem.prototypes[problem.train_y], 1.0)
         clouds = basin_samples(
             field, problem.prototypes, sigma=sigma, n_samples=64, n_steps=8, seed=0
@@ -320,7 +358,8 @@ class TestBasinOnTheToy:
 
     def test_each_cloud_sits_over_its_own_class(self, fitted_toy) -> None:
         problem, field = fitted_toy
-        transported = solve_ode(field, problem.train_x, n_steps=4, method="euler")
+        with torch.no_grad():
+            transported = solve_ode(field, problem.train_x, n_steps=4, method="euler")
         sigma = residual_sigma(transported, problem.prototypes[problem.train_y], 1.0)
         clouds = basin_samples(
             field, problem.prototypes, sigma=sigma, n_samples=64, n_steps=8, seed=0
