@@ -371,6 +371,35 @@ class TestBasinOnTheToy:
             assert int(distances.argmin()) == c
 
 
+class TestBasinAlignmentNormalization:
+    """Row normalization, and what happens when there is nothing to normalize."""
+
+    def test_rows_sum_to_one_when_anything_is_positive(self) -> None:
+        clouds = torch.tensor([[[1.0, 0.0]], [[0.0, 1.0]]])
+        test_x = torch.tensor([[1.0, 0.0], [0.0, 1.0]])
+        test_y = torch.tensor([0, 1])
+        alignment = basin_alignment(clouds, test_x, test_y, 2)
+        assert torch.allclose(alignment.sum(dim=1), torch.ones(2))
+        assert torch.allclose(alignment, torch.eye(2))
+
+    def test_a_row_anti_aligned_with_every_class_stays_zero(self) -> None:
+        """Negative mean cosine carries no 'belongs to' mass, so it is clamped
+        away rather than turned into a distribution by renormalizing."""
+        clouds = torch.tensor([[[-1.0, -1.0]]])
+        test_x = torch.tensor([[1.0, 1.0], [1.0, 1.0]])
+        test_y = torch.tensor([0, 1])
+        alignment = basin_alignment(clouds, test_x, test_y, 2)
+        assert torch.equal(alignment, torch.zeros(1, 2))
+
+    def test_a_class_with_no_test_rows_scores_zero(self) -> None:
+        clouds = torch.tensor([[[1.0, 0.0]]])
+        test_x = torch.tensor([[1.0, 0.0]])
+        test_y = torch.tensor([0])
+        alignment = basin_alignment(clouds, test_x, test_y, 3)
+        assert float(alignment[0, 1]) == 0.0
+        assert float(alignment[0, 2]) == 0.0
+
+
 class TestDeterminism:
     def test_two_invocations_at_one_seed_are_bit_identical(self) -> None:
         problem = make_toy_problem(seed=0, n_classes=3, per_class=32, anisotropy=2.0)

@@ -242,16 +242,17 @@ def basin_alignment(
     are clamped away before the row is normalized; a row with nothing positive
     in it stays zero rather than being manufactured into a distribution.
     """
-    matrix = torch.zeros(clouds.shape[0], n_classes, dtype=torch.float32)
-    normalized_clouds = torch.nn.functional.normalize(clouds, dim=-1)
+    # The mean of cos(u_i, v_j) over all pairs is the dot product of the two
+    # means of the unit vectors, so the C x C block is one matmul rather than
+    # C^2 of them. Classes with no test rows keep a zero column.
+    cloud_means = torch.nn.functional.normalize(clouds, dim=-1).mean(dim=1)
+    class_means = torch.zeros(n_classes, clouds.shape[-1], dtype=cloud_means.dtype)
     for target in range(n_classes):
         points = test_x[test_y == target]
         if points.shape[0] == 0:
             continue
-        normalized_points = torch.nn.functional.normalize(points, dim=-1)
-        for row in range(clouds.shape[0]):
-            matrix[row, target] = (normalized_clouds[row] @ normalized_points.T).mean()
-    positive = matrix.clamp_min(0.0)
+        class_means[target] = torch.nn.functional.normalize(points, dim=-1).mean(dim=0)
+    positive = (cloud_means @ class_means.T).clamp_min(0.0)
     return positive / positive.sum(dim=1, keepdim=True).clamp_min(1e-12)
 
 

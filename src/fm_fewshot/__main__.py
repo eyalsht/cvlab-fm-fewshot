@@ -1,4 +1,4 @@
-"""Command-line dispatch: features | run | sweep | report.
+"""Command-line dispatch: features | run | sweep | report | figures | reverse.
 
 Thin argument parsing only; behavior lives behind the sdk.
 """
@@ -36,6 +36,32 @@ def _sweep_parser(subparsers) -> None:  # noqa: ANN001
     p.add_argument("--dry-run", action="store_true", help="list the runs and exit")
 
 
+def _reverse_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser(
+        "reverse", help="integrate a Stage 2 run's field backwards (FR18, diagnostics only)"
+    )
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help="the stored run to annotate; found from the config when omitted",
+    )
+    p.add_argument(
+        "--mode",
+        action="append",
+        choices=["cycle", "basin", "meet", "volume", "all"],
+        help="repeatable; defaults to cycle, basin and meet",
+    )
+    p.add_argument("--reverse-steps", type=int, nargs="+", default=[4, 12, 32])
+    p.add_argument("--reverse-method", nargs="+", default=["euler", "midpoint"])
+    p.add_argument("--sigma-scale", type=float, default=1.0)
+    p.add_argument("--n-samples", type=int, default=128)
+    p.add_argument("--meet-times", type=float, nargs="+", default=[0.25, 0.5, 0.75])
+    p.add_argument("--n-hutchinson", type=int, default=1)
+
+
 def _report_parser(subparsers) -> None:  # noqa: ANN001
     p = subparsers.add_parser("report", help="regenerate results/TABLE.md")
     p.add_argument("--results-dir", type=Path, default=Path("results"))
@@ -63,6 +89,7 @@ def main(argv: list[str] | None = None) -> None:
     _sweep_parser(subparsers)
     _report_parser(subparsers)
     _figures_parser(subparsers)
+    _reverse_parser(subparsers)
     args = parser.parse_args(argv)
 
     if args.command == "features":
@@ -119,6 +146,39 @@ def main(argv: list[str] | None = None) -> None:
                 print(path)
         except MissingRunError as error:
             raise SystemExit(str(error)) from error
+
+    elif args.command == "reverse":
+        from fm_fewshot.services.evaluation.reverse_run import (
+            DEFAULT_MODES,
+            MissingRunError,
+            NotAnFmRunError,
+        )
+        from fm_fewshot.services.flow.reverse import ReverseConfig
+        from fm_fewshot.shared.config import load_config
+
+        chosen = args.mode or list(DEFAULT_MODES)
+        modes = list(DEFAULT_MODES) if "all" in chosen else chosen
+        primary = "volume" if modes == ["volume"] else "cycle"
+        try:
+            path = sdk.run_reverse(
+                load_config(args.config),
+                reverse_cfg=ReverseConfig(
+                    mode=primary,
+                    reverse_steps=tuple(args.reverse_steps),
+                    reverse_method=tuple(args.reverse_method),
+                    sigma_scale=args.sigma_scale,
+                    n_samples=args.n_samples,
+                    meet_times=tuple(args.meet_times),
+                    n_hutchinson=args.n_hutchinson,
+                ),
+                modes=modes,
+                data_root=args.data_root,
+                results_dir=args.results_dir,
+                run_id=args.run_id,
+            )
+        except (MissingRunError, NotAnFmRunError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        print(path)
 
     elif args.command == "report":
         from fm_fewshot.services.evaluation.report import IncompleteCellError, write_table
