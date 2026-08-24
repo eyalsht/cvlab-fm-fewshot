@@ -1,0 +1,16 @@
+head,k,top1,std
+fm_rolled T=12,5,0.384238,0.013274
+fm_rolled T=12,10,0.488249,0.009907
+fm_rolled T=12,full,0.637164,0.004096
+fm_rolled T=4,5,0.372837,0.006151
+fm_rolled T=4,10,0.435344,0.008288
+fm_rolled T=4,full,0.613361,0.001652
+fm_standard T=12,5,0.446545,0.008708
+fm_standard T=12,10,0.526853,0.005197
+fm_standard T=12,full,0.623362,0.008790
+fm_standard T=4,5,0.411641,0.002100
+fm_standard T=4,10,0.479848,0.009161
+fm_standard T=4,full,0.586159,0.011151
+prototype,5,0.254625,0.006129
+prototype,10,0.290829,0.007038
+prototype,full,0.362136,
