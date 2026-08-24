@@ -16,18 +16,6 @@ from fm_fewshot.services.evaluation.report import load_cells
 from fm_fewshot.services.features.cache import read_features
 
 
-def _projector(kind: str, seed: int):  # noqa: ANN202
-    if kind == "pca":
-        from sklearn.decomposition import PCA
-
-        return PCA(n_components=2, random_state=seed)
-    if kind == "tsne":
-        from sklearn.manifold import TSNE
-
-        return TSNE(n_components=2, random_state=seed, init="pca", perplexity=30)
-    raise ValueError(f"unknown projection {kind!r}; use 'pca' or 'tsne'")
-
-
 def _find_run(results_dir: Path, **match) -> tuple[str, dict]:
     for run_dir in sorted(results_dir.iterdir()):
         summary_path = run_dir / "summary.json"
@@ -84,7 +72,9 @@ def make_figures(
                     cells, dataset, encoder, out_dir / f"size_curve_{encoder}.png"
                 )
             )
-            _write_series_csv(cells, dataset, encoder, out_dir / f"size_curve_{encoder}.csv")
+            figures.write_series_csv(
+                cells, dataset, encoder, out_dir / f"size_curve_{encoder}.csv"
+            )
 
             # F2, the representative 10-shot linear-probe run the write-up asks for
             run_id, payload = _find_run(
@@ -106,7 +96,7 @@ def make_figures(
                 max_per_class=spec["max_per_class"],
             )
             projected, projected_protos = figures.project_jointly(
-                points, protos, _projector(spec["projection"], spec["viz_seed"])
+                points, protos, figures.make_projector(spec["projection"], spec["viz_seed"])
             )
             written.append(
                 figures.plot_feature_space(
@@ -141,16 +131,6 @@ def make_figures(
         )
 
     return written
-
-
-def _write_series_csv(cells, dataset: str, encoder: str, out: Path) -> None:
-    series = figures.size_curve_series(cells, dataset, encoder)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["head,k,top1,std"]
-    for head, entry in sorted(series.items()):
-        for x, y, err in zip(entry["x"], entry["y"], entry["yerr"], strict=True):
-            lines.append(f"{head},{x},{y:.6f},{'' if err is None else f'{err:.6f}'}")
-    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_confusions(pairs, out: Path) -> None:

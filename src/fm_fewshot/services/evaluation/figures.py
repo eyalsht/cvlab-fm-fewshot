@@ -13,6 +13,7 @@ figures treated as qualitative.
 """
 
 import csv
+import math
 from pathlib import Path
 
 import matplotlib
@@ -126,9 +127,9 @@ def top_confusions(
     return sorted(pairs, key=lambda p: -p[2])[:limit]
 
 
-def plot_size_curve(cells, dataset: str, encoder: str, out: Path) -> Path:
+def plot_size_curve(cells, dataset: str, encoder: str, out: Path, *, dpi: int = 200) -> Path:
     series = size_curve_series(cells, dataset, encoder)
-    fig, ax = plt.subplots(figsize=(5.2, 3.6), dpi=200)
+    fig, ax = plt.subplots(figsize=(5.2, 3.6), dpi=dpi)
     positions = range(len(K_ORDER))
     for head, entry in sorted(series.items()):
         xs = [K_ORDER.index(label) for label in entry["x"]]
@@ -142,10 +143,7 @@ def plot_size_curve(cells, dataset: str, encoder: str, out: Path) -> Path:
     ax.grid(alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out)
-    plt.close(fig)
-    return out
+    return _save(fig, out)
 
 
 def plot_loss_curves(epochs_csv: Path, best_epoch: int, title: str, out: Path) -> Path:
@@ -253,20 +251,229 @@ def feature_space_inputs(
     )
 
 
+# --------------------------------------------------------------------------
+# Stage 2 (PRD_stage2_figures). S1 to S4 reuse the Stage 1 helpers above rather
+# than copying them: one color mapping, one series aggregation, one joint-fit
+# rule, so a class cannot drift color between the two stages.
+# --------------------------------------------------------------------------
+
+STAGE2_HEADS = ("fm_standard", "fm_rolled")
+
+# Suppress the toolchain version string matplotlib otherwise stamps into the
+# PNG. These are graded deliverables that must regenerate byte-identically from
+# stored results, and a metadata chunk that moves with the matplotlib version
+# would break that without changing a single pixel.
+PNG_METADATA = {"Software": None}
+
+
+def scheme_label(head: str, sample_steps: int) -> str:
+    """Name one Stage 2 configuration by its head and its step count.
+
+    T is not part of report's cell key, so a Stage 2 panel that grouped by head
+    alone would average T=4 and T=12 into one line and hide exactly the
+    discretization effect the write-up asks about.
+    """
+    return f"{head} T={sample_steps}"
+
+
+def viz_test_rows(
+    test_y: torch.Tensor, class_ids: list[int], max_per_class: int
+) -> tuple[torch.Tensor, np.ndarray]:
+    """The test rows every compared panel shares, and their local class ids.
+
+    Rows into the test cache, not features: the write-up requires the same test
+    examples in each compared plot, and that is only checkable if the panels
+    carry the indices they were built from.
+    """
+    if not class_ids:
+        raise ValueError("no visualization classes were given")
+    rows, labels = [], []
+    for local, class_id in enumerate(class_ids):
+        idx = torch.nonzero(test_y == class_id, as_tuple=False).flatten()[:max_per_class]
+        rows.append(idx)
+        labels.append(np.full(int(idx.shape[0]), local, dtype=np.int64))
+    return torch.cat(rows), np.concatenate(labels)
+
+
+def make_projector(kind: str, seed: int):  # noqa: ANN202 - an sklearn estimator
+    """The projector both stages fit. Seeded, because the figures must repeat."""
+    if kind == "pca":
+        from sklearn.decomposition import PCA
+
+        return PCA(n_components=2, random_state=seed)
+    if kind == "tsne":
+        from sklearn.manifold import TSNE
+
+        return TSNE(n_components=2, random_state=seed, init="pca", perplexity=30)
+    raise ValueError(f"unknown projection {kind!r}; use 'pca' or 'tsne'")
+
+
+def write_series_csv(cells, dataset: str, encoder: str, out: Path) -> Path:
+    """The numbers behind an accuracy-versus-K panel, so the plot is checkable."""
+    series = size_curve_series(cells, dataset, encoder)
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["head,k,top1,std"]
+    for head, entry in sorted(series.items()):
+        for x, y, err in zip(entry["x"], entry["y"], entry["yerr"], strict=True):
+            lines.append(f"{head},{x},{y:.6f},{'' if err is None else f'{err:.6f}'}")
+    out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return out
+
+
+def _save(fig, out: Path) -> Path:  # noqa: ANN001 - a matplotlib Figure
+    out = Path(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out, metadata=PNG_METADATA)
+    plt.close(fig)
+    return out
+
+
+def stability_note(losses: list[float]) -> str:
+    """What S2 exists to say: did this scheme train stably, and if not, where.
+
+    The write-up's stated purpose for the training curves is verifying
+    stability, so the answer is written on the figure instead of being left for
+    a reader to infer from the shape of a line.
+    """
+    if not losses:
+        return "no recorded steps"
+    for step, value in enumerate(losses, start=1):
+        if not math.isfinite(value):
+            return f"diverged at step {step}"
+    trend = "no net decrease" if losses[-1] > losses[0] else "stable"
+    return f"{trend}: {losses[0]:.3g} to {losses[-1]:.3g} over {len(losses)} steps"
+
+
+def plot_stage2_loss_curves(*, curves, title: str, out: Path, dpi: int = 200) -> Path:
+    """S2. One panel per scheme, never a shared axis.
+
+    A velocity residual and a squared endpoint distance are not comparable in
+    value, so drawing them on one axis would invite a comparison the numbers do
+    not support. Separate panels, and the caption says why.
+    """
+    fig, axes = plt.subplots(
+        1, len(curves), figsize=(5.0 * len(curves), 3.8), dpi=dpi, squeeze=False
+    )
+    for ax, (name, steps, losses) in zip(axes[0], curves, strict=True):
+        ax.plot(steps, losses, linewidth=1.1)
+        ax.set_xlabel("training step")
+        ax.set_ylabel("training loss")
+        ax.set_title(f"{name}\n{stability_note(losses)}", fontsize=8)
+        ax.grid(alpha=0.3)
+    fig.suptitle(title, fontsize=10)
+    fig.text(
+        0.5, 0.005,
+        "the two losses are a velocity residual and a squared endpoint distance; "
+        "their values are not comparable, only their stability",
+        ha="center", fontsize=6,
+    )
+    fig.tight_layout()
+    return _save(fig, out)
+
+
+def _panel_grid(count: int, dpi: int):  # noqa: ANN202 - a matplotlib Figure and Axes
+    fig, axes = plt.subplots(1, count, figsize=(4.7 * count, 4.7), dpi=dpi, squeeze=False)
+    return fig, axes[0]
+
+
+def _draw_prototypes(ax, prototypes, class_names, colors, *, label: bool) -> None:  # noqa: ANN001
+    for i, class_name in enumerate(class_names):
+        ax.scatter(
+            prototypes[i, 0], prototypes[i, 1], s=170, marker="*",
+            color=colors[class_name], edgecolors="black", linewidths=0.8, zorder=5,
+            label=class_name if label else None,
+        )
+
+
+def plot_feature_panels(
+    *, panels, labels, prototypes, class_names, colors, title: str, out: Path, dpi: int = 200
+) -> Path:
+    """S3. The original features and the same test examples after each scheme.
+
+    The points arrive already projected. Fitting the projection is the caller's
+    job because it has to happen once over every panel and the prototypes
+    together, which is a property of the comparison, not of the drawing.
+    """
+    fig, axes = _panel_grid(len(panels), dpi)
+    for column, (ax, (name, points)) in enumerate(zip(axes, panels, strict=True)):
+        for i, class_name in enumerate(class_names):
+            mask = labels == i
+            ax.scatter(
+                points[mask, 0], points[mask, 1], s=10, alpha=0.6,
+                color=colors[class_name], linewidths=0,
+                label=class_name if column == 0 else None,
+            )
+        _draw_prototypes(ax, prototypes, class_names, colors, label=False)
+        ax.set_title(name, fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    axes[0].legend(fontsize=6, loc="best", framealpha=0.85, ncol=2)
+    fig.suptitle(title, fontsize=10)
+    fig.text(
+        0.5, 0.005,
+        "qualitative; one projection fitted jointly over all panels and the "
+        "prototypes, so the panels share coordinates; stars are class prototypes",
+        ha="center", fontsize=6,
+    )
+    fig.tight_layout()
+    return _save(fig, out)
+
+
+def plot_trajectory_panels(
+    *, panels, labels, prototypes, class_names, colors, title: str, out: Path, dpi: int = 200
+) -> Path:
+    """S4. Every Euler state of a few test examples, in the class colors."""
+    fig, axes = _panel_grid(len(panels), dpi)
+    for ax, (name, states) in zip(axes, panels, strict=True):
+        for row in range(states.shape[1]):
+            color = colors[class_names[int(labels[row])]]
+            path = states[:, row, :]
+            ax.plot(path[:, 0], path[:, 1], color=color, linewidth=0.9, alpha=0.8, zorder=2)
+            ax.scatter(path[0, 0], path[0, 1], s=22, marker="o", color=color,
+                       edgecolors="black", linewidths=0.4, zorder=3)
+            ax.scatter(path[-1, 0], path[-1, 1], s=36, marker="X", color=color,
+                       edgecolors="black", linewidths=0.4, zorder=4)
+        _draw_prototypes(ax, prototypes, class_names, colors, label=ax is axes[0])
+        ax.set_title(name, fontsize=9)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    axes[0].legend(fontsize=6, loc="best", framealpha=0.85, ncol=2)
+    fig.suptitle(title, fontsize=10)
+    fig.text(
+        0.5, 0.005,
+        "qualitative; circles are the original features, crosses the transported "
+        "features, stars the class prototypes",
+        ha="center", fontsize=6,
+    )
+    fig.tight_layout()
+    return _save(fig, out)
+
+
 __all__ = [
     "MissingRunError",
+    "PNG_METADATA",
+    "STAGE2_HEADS",
     "class_colors",
     "confusion_matrix",
     "feature_space_inputs",
     "k_label",
+    "make_projector",
     "plot_confusion",
+    "plot_feature_panels",
     "plot_feature_space",
     "plot_loss_curves",
     "plot_size_curve",
+    "plot_stage2_loss_curves",
+    "plot_trajectory_panels",
     "project_jointly",
     "prototypes_for",
     "require_cells",
+    "scheme_label",
     "size_curve_series",
+    "stability_note",
     "top_confusions",
     "validate_viz_classes",
+    "viz_test_rows",
+    "write_series_csv",
 ]

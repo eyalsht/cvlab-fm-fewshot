@@ -1,10 +1,12 @@
-# Stage 1 figure configuration.
+# Figure configuration, shared by the Stage 1 families F1 to F4 and the Stage 2
+# families S1 to S4.
 #
 # viz_classes is fixed per dataset and never varies between encoders: the
 # write-up requires the same classes, the same test examples and the same class
 # colors whenever encoders or methods are compared on one dataset. Colors are
 # derived from the sorted class list (figures.class_colors), so pinning the
-# list here pins the colors too.
+# list here pins the colors too, and Stage 2 reads the same list so a class
+# keeps its color across the two stages.
 
 projection: pca        # pca or tsne; PCA is a linear map both encoders' points
                        # pass through identically, which is the safer default
@@ -12,6 +14,17 @@ projection: pca        # pca or tsne; PCA is a linear map both encoders' points
 viz_seed: 0
 max_per_class: 60
 dpi: 200
+
+# Stage 2. The representative cell S2, S3 and S4 are drawn from: one setting,
+# stated here rather than chosen per figure, so the training curve, the feature
+# comparison and the trajectories all describe the same fitted field.
+stage2:
+  representative_k: 10          # 10-shot, as the write-up's training-curve item asks
+  representative_subset_seed: 0
+  t_values: [4, 12]             # the two step counts the write-up evaluates
+  feature_t: 4                  # the T at which S3 compares the two schemes
+  trajectory_classes: 3         # S4 stays readable only at a few classes
+  trajectory_per_class: 2
 
 datasets:
   dtd:
