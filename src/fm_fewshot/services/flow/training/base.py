@@ -32,6 +32,22 @@ from fm_fewshot.services.flow.solver import solve_ode
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 
 BatchLoss = Callable[[VelocityMLP, Tensor, Tensor, torch.Generator], Tensor]
+# (1-based step, global gradient norm) -> None. See `train_field`.
+StepObserver = Callable[[int, float], None]
+
+
+def _gradient_norm(field: VelocityMLP) -> float:
+    """The norm of the concatenated gradient over every parameter that has one.
+
+    One number, so a 2000-step fit summarizes as a distribution rather than a
+    wall of per-tensor norms. Parameters with no gradient are skipped rather
+    than counted as zero, which would deflate the norm silently.
+    """
+    total = torch.zeros(())
+    for parameter in field.parameters():
+        if parameter.grad is not None:
+            total = total + parameter.grad.detach().pow(2).sum()
+    return float(total.sqrt())
 
 
 class Classifier(Protocol):
@@ -145,6 +161,7 @@ def train_field(
     batch_size: int = 64,
     lr: float = 1e-3,
     init_seed: int = 0,
+    on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta on the paired coupling (x0[i] -> x1[i]); return it and its loss curve.
 
@@ -154,6 +171,12 @@ def train_field(
     Everything after them is the training configuration both schemes share.
     With no selector, or one built with `eval_every = 0`, the field returned is
     the field the last optimizer step left.
+
+    `on_step` is a diagnostic and defaults to off. When given, it is handed the
+    1-based step number and the global gradient norm, read after `backward` and
+    before `optimizer.step()`, which is the only point at which the gradient
+    the optimizer is about to apply exists. It reads buffers and consumes no
+    randomness, so an observed fit stays bit-identical to an unobserved one.
     """
     if x0.shape != x1.shape:
         raise ValueError(
@@ -187,6 +210,8 @@ def train_field(
             raise ValueError(f"non-finite training loss at step {step}")
         optimizer.zero_grad()
         loss.backward()
+        if on_step is not None:
+            on_step(step + 1, _gradient_norm(field))
         optimizer.step()
         history.append(float(loss.detach()))
         if selector is not None:

@@ -36,6 +36,7 @@ from torch.utils.checkpoint import checkpoint
 
 from fm_fewshot.services.flow.solver import VelocityField
 from fm_fewshot.services.flow.training.base import (
+    StepObserver,
     ValidationSelector,
     train_field,
     transport,
@@ -77,6 +78,7 @@ def train_rolled_out_field(
     lr: float = 1e-3,
     gradient_checkpointing: bool = False,
     init_seed: int = 0,
+    on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta by rolling the solver out over the paired coupling (x0[i] -> x1[i])."""
     if sample_steps < 1:
@@ -105,6 +107,7 @@ def train_rolled_out_field(
         batch_size=batch_size,
         lr=lr,
         init_seed=init_seed,
+        on_step=on_step,
     )
 
 
