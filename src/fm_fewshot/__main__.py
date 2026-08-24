@@ -48,11 +48,18 @@ def _report_parser(subparsers) -> None:  # noqa: ANN001
 
 
 def _figures_parser(subparsers) -> None:  # noqa: ANN001
-    p = subparsers.add_parser("figures", help="regenerate the Stage 1 figures")
+    p = subparsers.add_parser("figures", help="regenerate the figure families")
     p.add_argument("--config", type=Path, default=Path("config/figures.yaml"))
     p.add_argument("--results-dir", type=Path, default=Path("results"))
     p.add_argument("--data-root", type=Path, default=Path("data"))
     p.add_argument("--assets-dir", type=Path, default=Path("assets"))
+    p.add_argument(
+        "--stage",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="1 for the Stage 1 families F1 to F4, 2 for the Stage 2 families S1 to S4",
+    )
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -109,8 +116,9 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "figures":
         from fm_fewshot.services.evaluation.figures import MissingRunError
 
+        generate = sdk.make_figures if args.stage == 1 else sdk.make_stage2_figures
         try:
-            for path in sdk.make_figures(
+            for path in generate(
                 args.config,
                 results_dir=args.results_dir,
                 data_root=args.data_root,
