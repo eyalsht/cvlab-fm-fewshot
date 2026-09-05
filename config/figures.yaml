@@ -1,12 +1,12 @@
-# Figure configuration, shared by the Stage 1 families F1 to F4 and the Stage 2
-# families S1 to S4.
+# Figure configuration, shared by the Stage 1 families F1 to F4, the Stage 2
+# families S1 to S7 and the Stage 3 families P1 to P4.
 #
 # viz_classes is fixed per dataset and never varies between encoders: the
 # write-up requires the same classes, the same test examples and the same class
 # colors whenever encoders or methods are compared on one dataset. Colors are
 # derived from the sorted class list (figures.class_colors), so pinning the
-# list here pins the colors too, and Stage 2 reads the same list so a class
-# keeps its color across the two stages.
+# list here pins the colors too, and Stage 2 and Stage 3 read the same list so a
+# class keeps its color across all three stages.
 
 projection: pca        # pca or tsne; PCA is a linear map both encoders' points
                        # pass through identically, which is the safer default
@@ -25,6 +25,21 @@ stage2:
   feature_t: 4                  # the T at which S3 compares the two schemes
   trajectory_classes: 3         # S4 stays readable only at a few classes
   trajectory_per_class: 2
+
+# Stage 3. Same idea and the same reason: P2's curves, P3's feature panels and
+# P4's displacement panels all describe one fitted field per strategy, so the
+# setting is stated once here rather than chosen per figure.
+stage3:
+  representative_k: 10
+  representative_subset_seed: 0
+  t_values: [4, 12]             # the two step counts the Stage 3 grid runs
+  feature_t: 4                  # the T at which P3 and P4 compare the two strategies
+  # The Main Comparison's encoder per dataset, the cells he narrowed Stage 3 to
+  # (ADR-029). P1 marks that cell on the panel rather than drawing it separately,
+  # so the required comparison and the extended grid are one picture.
+  main_encoder:
+    dtd: resnet18
+    fgvc_aircraft: dinov2_vits14
 
 datasets:
   dtd:

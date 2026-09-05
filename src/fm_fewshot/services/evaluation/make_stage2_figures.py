@@ -19,7 +19,6 @@ Validation runs to completion before anything is drawn. A missing run has to
 refuse by name and leave no half-written assets directory behind.
 """
 
-import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -147,11 +146,16 @@ def find_run(
     k: int | None,
     subset_seed: int,
     sample_steps: int | None = None,
+    stage: int = 2,
 ) -> Path:
     """The stored run directory for one grid point, or a refusal naming it.
 
     sample_steps lives inside head_params rather than at the top of the config,
     so it cannot be matched by the plain key comparison the Stage 1 finder uses.
+
+    `stage` only names the caller in the refusal. Stage 3 finds its runs the same
+    way and a message naming the wrong stage would send the reader to the wrong
+    sweep config.
     """
     results_dir = Path(results_dir)
     if results_dir.exists():
@@ -171,7 +175,7 @@ def find_run(
     raise figures.MissingRunError(
         f"no stored run for dataset={dataset}, encoder={encoder}, head={head}{steps}, "
         f"K={figures.k_label(k)}, subset_seed={subset_seed} under {results_dir}; the "
-        "Stage 2 figure would be partial, so nothing was written"
+        f"Stage {stage} figure would be partial, so nothing was written"
     )
 
 
@@ -217,32 +221,22 @@ class ProjectedPanels:
 
     panels: tuple[tuple[str, np.ndarray], ...]
     labels: np.ndarray
-    prototypes: np.ndarray
+    # None for a comparison with no prototypes in it, which is every Stage 3 one.
+    prototypes: np.ndarray | None
     indices: np.ndarray
 
 
-def _as_array(x) -> np.ndarray:
-    return x.detach().cpu().numpy() if torch.is_tensor(x) else np.asarray(x)
+_as_array = figures.as_array
 
 
 def _project_blocks(blocks, prototypes, projector):  # noqa: ANN202 - arrays and an estimator
     """One fit over every block and the prototypes, then split back.
 
-    The write-up: "Compute the projection jointly over the feature sets and
-    prototypes being compared so that the different views correspond to the
-    same low-dimensional representation." Transforming a set that did not help
-    define the space puts it in coordinates it never earned.
+    The rule lives in `figures.project_blocks` because Stage 3 needs it too,
+    without the prototypes: fitting per panel produces unrelated pictures in
+    either stage.
     """
-    flat = [block.reshape(-1, block.shape[-1]) for block in blocks]
-    protos = _as_array(prototypes)
-    embedded = np.asarray(projector.fit_transform(np.concatenate([*flat, protos], axis=0)))
-
-    split, start = [], 0
-    for block, rows in zip(blocks, flat, strict=True):
-        stop = start + rows.shape[0]
-        split.append(embedded[start:stop].reshape(*block.shape[:-1], embedded.shape[1]))
-        start = stop
-    return split, embedded[start:]
+    return figures.project_blocks(blocks, projector, extra=prototypes)
 
 
 def three_way_panels(test_x, rows, labels, schemes, prototypes, projector) -> ProjectedPanels:
@@ -302,35 +296,8 @@ class _Plan:
     test_y: torch.Tensor
 
 
-def _read_loss_curve(path: Path) -> tuple[list[int], list[float]]:
-    with Path(path).open(encoding="utf-8") as handle:
-        rows = list(csv.DictReader(handle))
-    return [int(r["step"]) for r in rows], [float(r["train_loss"]) for r in rows]
-
-
-def _read_selection(run_dir: Path) -> dict:
-    """Everything S7 draws for one run, straight from what the run stored.
-
-    `best_epoch` comes from `summary.json` rather than from the validation
-    column's argmax so the marked step is the step the head actually restored,
-    including its tie rule. Recomputing it here would let the figure and the
-    table disagree without either being obviously wrong.
-    """
-    run_dir = Path(run_dir)
-    steps, losses = _read_loss_curve(run_dir / "loss_curve.csv")
-    with (run_dir / "loss_curve.csv").open(encoding="utf-8") as handle:
-        validation = [
-            (int(r["step"]), float(r["val_top1"]))
-            for r in csv.DictReader(handle)
-            if r.get("val_top1")
-        ]
-    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
-    return {
-        "steps": steps,
-        "losses": losses,
-        "validation": validation,
-        "selected_step": summary.get("best_epoch"),
-    }
+_read_loss_curve = figures.read_loss_curve
+_read_selection = figures.read_selection
 
 
 def _needed_steps(head: str, feature_t: int, t_values) -> list[int]:

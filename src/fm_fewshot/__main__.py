@@ -117,9 +117,10 @@ def _figures_parser(subparsers) -> None:  # noqa: ANN001
     p.add_argument(
         "--stage",
         type=int,
-        choices=(1, 2),
+        choices=(1, 2, 3),
         default=1,
-        help="1 for the Stage 1 families F1 to F4, 2 for the Stage 2 families S1 to S4",
+        help="1 for the Stage 1 families F1 to F4, 2 for the Stage 2 families S1 to S7, "
+        "3 for the Stage 3 families P1 to P4",
     )
 
 
@@ -180,7 +181,11 @@ def main(argv: list[str] | None = None) -> None:
     elif args.command == "figures":
         from fm_fewshot.services.evaluation.figures import MissingRunError
 
-        generate = sdk.make_figures if args.stage == 1 else sdk.make_stage2_figures
+        generate = {
+            1: sdk.make_figures,
+            2: sdk.make_stage2_figures,
+            3: sdk.make_stage3_figures,
+        }[args.stage]
         try:
             for path in generate(
                 args.config,

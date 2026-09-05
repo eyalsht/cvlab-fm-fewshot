@@ -9,6 +9,7 @@ from pathlib import Path
 from fm_fewshot.services.evaluation.loop import run_experiment
 from fm_fewshot.services.evaluation.make_figures import make_figures
 from fm_fewshot.services.evaluation.make_stage2_figures import make_stage2_figures
+from fm_fewshot.services.evaluation.make_stage3_figures import make_stage3_figures
 from fm_fewshot.services.evaluation.reverse_run import run_reverse
 from fm_fewshot.services.evaluation.rowspace_diagnostics import run_rowspace_diagnostics
 from fm_fewshot.services.evaluation.scale_diagnostics import run_diagnostics
@@ -20,6 +21,7 @@ __all__ = [
     "build_features",
     "make_figures",
     "make_stage2_figures",
+    "make_stage3_figures",
     "run_diagnostics",
     "run_experiment",
     "run_reverse",

@@ -13,6 +13,7 @@ figures treated as qualitative.
 """
 
 import csv
+import json
 import math
 from pathlib import Path
 
@@ -23,10 +24,14 @@ import torch.nn.functional as F  # noqa: N812
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib.colors import ListedColormap  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 
 from fm_fewshot.services.data.subsets import balanced_subset  # noqa: E402
 from fm_fewshot.services.evaluation.metrics import confusion_matrix  # noqa: E402
+from fm_fewshot.services.evaluation.report import head_key  # noqa: E402
 from fm_fewshot.services.features.cache import read_features  # noqa: E402
+from fm_fewshot.services.heads import dacc_baseline  # noqa: E402
 from fm_fewshot.shared.contracts import CellSummary  # noqa: E402
 
 K_ORDER = ("5", "10", "full")
@@ -308,13 +313,19 @@ def make_projector(kind: str, seed: int):  # noqa: ANN202 - an sklearn estimator
     raise ValueError(f"unknown projection {kind!r}; use 'pca' or 'tsne'")
 
 
-def write_series_csv(cells, dataset: str, encoder: str, out: Path) -> Path:
-    """The numbers behind an accuracy-versus-K panel, so the plot is checkable."""
+def write_series_csv(cells, dataset: str, encoder: str, out: Path, *, order=None) -> Path:
+    """The numbers behind an accuracy-versus-K panel, so the plot is checkable.
+
+    `order` names the rows and their sequence, for a panel whose lines are the
+    protocol's rather than whatever the run store happens to hold. Stage 1 and
+    Stage 2 draw every head they find and pass nothing.
+    """
     series = size_curve_series(cells, dataset, encoder)
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
+    rows = sorted(series.items()) if order is None else [(name, series[name]) for name in order]
     lines = ["head,k,top1,std"]
-    for head, entry in sorted(series.items()):
+    for head, entry in rows:
         for x, y, err in zip(entry["x"], entry["y"], entry["yerr"], strict=True):
             lines.append(f"{head},{x},{y:.6f},{'' if err is None else f'{err:.6f}'}")
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -401,7 +412,15 @@ def selection_note(
     return f"{kept}; loss minimum at step {loss_min_step}"
 
 
-def plot_selection(*, panels, title: str, out: Path, dpi: int = 200) -> Path:
+SELECTION_CAPTION = (
+    "selection is on validation top-1, not on the loss (ADR-028); the dashed "
+    "rule is the step the run kept"
+)
+
+
+def plot_selection(
+    *, panels, title: str, out: Path, dpi: int = 200, caption: str = SELECTION_CAPTION
+) -> Path:
     """S7. Two rows sharing one x axis per scheme, never a twin y axis.
 
     A loss spanning three decades and an accuracy in [0, 1] have no common
@@ -467,12 +486,7 @@ def plot_selection(*, panels, title: str, out: Path, dpi: int = 200) -> Path:
             )
 
     fig.suptitle(title, fontsize=10)
-    fig.text(
-        0.5, 0.005,
-        "selection is on validation top-1, not on the loss (ADR-028); the dashed "
-        "rule is the step the run kept",
-        ha="center", fontsize=6,
-    )
+    fig.text(0.5, 0.005, caption, ha="center", fontsize=6)
     fig.tight_layout()
     return _save(fig, out)
 
@@ -492,37 +506,101 @@ def _draw_prototypes(ax, prototypes, class_names, colors, *, label: bool) -> Non
 
 
 def plot_feature_panels(
-    *, panels, labels, prototypes, class_names, colors, title: str, out: Path, dpi: int = 200
+    *, panels, labels, class_names, colors, title: str, out: Path,
+    prototypes=None, boundary=None, dpi: int = 200,
 ) -> Path:
-    """S3. The original features and the same test examples after each scheme.
+    """S3 and P3. The original features and the same test examples after each scheme.
 
     The points arrive already projected. Fitting the projection is the caller's
-    job because it has to happen once over every panel and the prototypes
-    together, which is a property of the comparison, not of the drawing.
+    job because it has to happen once over every panel, which is a property of
+    the comparison and not of the drawing.
+
+    `prototypes` is Stage 2's. Stage 3 passes none: it transports toward nothing,
+    and a star on the panel would suggest a target that does not exist. What
+    replaces them, when the projection is linear, is `boundary`, the frozen
+    probe restricted to the plotted plane (see `reduced_probe`) as
+    `(weight, bias, class_ids)` with the plotted classes' global ids.
     """
     fig, axes = _panel_grid(len(panels), dpi)
+    # The box is computed once over every panel, so the boundary is the same map
+    # in each. Only drawn when there is one: the Stage 2 panels are unchanged.
+    extent = None if boundary is None else _panel_extent(panels)
     for column, (ax, (name, points)) in enumerate(zip(axes, panels, strict=True)):
+        if boundary is not None:
+            _draw_decision_regions(ax, boundary, class_names, colors, extent)
         for i, class_name in enumerate(class_names):
             mask = labels == i
             ax.scatter(
                 points[mask, 0], points[mask, 1], s=10, alpha=0.6,
                 color=colors[class_name], linewidths=0,
+                zorder=None if boundary is None else 2,
                 label=class_name if column == 0 else None,
             )
-        _draw_prototypes(ax, prototypes, class_names, colors, label=False)
+        if prototypes is not None:
+            _draw_prototypes(ax, prototypes, class_names, colors, label=False)
+        if boundary is not None:
+            ax.set_xlim(extent[0], extent[1])
+            ax.set_ylim(extent[2], extent[3])
         ax.set_title(name, fontsize=9)
         ax.set_xticks([])
         ax.set_yticks([])
     axes[0].legend(fontsize=6, loc="best", framealpha=0.85, ncol=2)
     fig.suptitle(title, fontsize=10)
-    fig.text(
-        0.5, 0.005,
-        "qualitative; one projection fitted jointly over all panels and the "
-        "prototypes, so the panels share coordinates; stars are class prototypes",
-        ha="center", fontsize=6,
-    )
+    fig.text(0.5, 0.005, _feature_caption(prototypes, boundary), ha="center", fontsize=6)
     fig.tight_layout()
     return _save(fig, out)
+
+
+def _feature_caption(prototypes, boundary) -> str:  # noqa: ANN001
+    text = "qualitative; one projection fitted jointly over all panels"
+    if prototypes is not None:
+        text += " and the prototypes"
+    text += ", so the panels share coordinates"
+    if prototypes is not None:
+        text += "; stars are class prototypes"
+    if boundary is not None:
+        text += (
+            "; the shading is the frozen probe's decision regions in the plotted "
+            "plane, unshaded where the winner is a class this panel does not draw"
+        )
+    return text
+
+
+def _panel_extent(panels) -> tuple[float, float, float, float]:  # noqa: ANN001
+    """The box every panel is drawn in, so a boundary is the same map in each."""
+    stacked = np.concatenate([np.asarray(points).reshape(-1, 2) for _, points in panels])
+    low, high = stacked.min(axis=0), stacked.max(axis=0)
+    pad = 0.04 * np.maximum(high - low, 1e-9)
+    return (
+        float(low[0] - pad[0]), float(high[0] + pad[0]),
+        float(low[1] - pad[1]), float(high[1] + pad[1]),
+    )
+
+
+DECISION_GRID = 200
+
+
+def _draw_decision_regions(ax, boundary, class_names, colors, extent) -> None:  # noqa: ANN001
+    """The frozen probe's argmax over the plotted plane, at low contrast.
+
+    The argmax runs over every class the probe fits, not only the plotted ones:
+    restricting it would draw a classifier the run never used. Regions won by a
+    class this panel does not draw are left unshaded rather than recolored.
+    """
+    weight, bias, class_ids = boundary
+    xs = np.linspace(extent[0], extent[1], DECISION_GRID)
+    ys = np.linspace(extent[2], extent[3], DECISION_GRID)
+    grid = np.stack(np.meshgrid(xs, ys), axis=-1).reshape(-1, 2)
+    winner = np.argmax(grid @ np.asarray(weight).T + np.asarray(bias), axis=1)
+    local = np.zeros(winner.shape[0], dtype=np.int64)
+    for i, class_id in enumerate(class_ids):
+        local[winner == class_id] = i + 1
+    ax.imshow(
+        local.reshape(DECISION_GRID, DECISION_GRID),
+        origin="lower", extent=extent, aspect="auto", zorder=0, alpha=0.18,
+        interpolation="nearest", vmin=0, vmax=len(class_names),
+        cmap=ListedColormap(["#ffffff", *(colors[name] for name in class_names)]),
+    )
 
 
 def plot_trajectory_panels(
@@ -555,29 +633,352 @@ def plot_trajectory_panels(
     return _save(fig, out)
 
 
+# --------------------------------------------------------------------------
+# Shared with both later stages: one joint-fit rule and one reader for what a
+# run stored about its own selection, so the two drivers cannot drift apart.
+# --------------------------------------------------------------------------
+
+
+def as_array(x) -> np.ndarray:  # noqa: ANN001 - a Tensor or anything array-like
+    return x.detach().cpu().numpy() if torch.is_tensor(x) else np.asarray(x)
+
+
+def project_blocks(blocks, projector, extra=None):  # noqa: ANN001, ANN201 - arrays
+    """One fit over every compared block, then split back.
+
+    The write-up: "Compute the projection jointly over the feature sets and
+    prototypes being compared so that the different views correspond to the same
+    low-dimensional representation." Transforming a set that did not help define
+    the space puts it in coordinates it never earned.
+
+    `extra` is Stage 2's prototypes, which are part of that comparison. Stage 3
+    has none, passes nothing, and gets None back in their place.
+    """
+    flat = [block.reshape(-1, block.shape[-1]) for block in blocks]
+    stacked = [*flat] if extra is None else [*flat, as_array(extra)]
+    embedded = np.asarray(projector.fit_transform(np.concatenate(stacked, axis=0)))
+
+    split, start = [], 0
+    for block, rows in zip(blocks, flat, strict=True):
+        stop = start + rows.shape[0]
+        split.append(embedded[start:stop].reshape(*block.shape[:-1], embedded.shape[1]))
+        start = stop
+    return split, (None if extra is None else embedded[start:])
+
+
+def read_loss_curve(path: Path) -> tuple[list[int], list[float]]:
+    with Path(path).open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    return [int(r["step"]) for r in rows], [float(r["train_loss"]) for r in rows]
+
+
+def read_selection(run_dir: Path) -> dict:
+    """Everything a selection figure draws for one run, straight from the run.
+
+    `best_epoch` comes from `summary.json` rather than from the validation
+    column's argmax, so the marked step is the step the head actually restored,
+    including its tie rule. Recomputing it here would let the figure and the
+    table disagree without either being obviously wrong.
+    """
+    run_dir = Path(run_dir)
+    steps, losses = read_loss_curve(run_dir / "loss_curve.csv")
+    with (run_dir / "loss_curve.csv").open(encoding="utf-8") as handle:
+        validation = [
+            (int(r["step"]), float(r["val_top1"]))
+            for r in csv.DictReader(handle)
+            if r.get("val_top1")
+        ]
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    return {
+        "steps": steps,
+        "losses": losses,
+        "validation": validation,
+        "selected_step": summary.get("best_epoch"),
+    }
+
+
+# --------------------------------------------------------------------------
+# Stage 3 (PRD_stage3_figures). P1 accuracy against K, P2 the training and
+# validation curves, P3 the before-and-after features, P4 the displacement
+# decomposition (ADR-036). P2 and P3 are S7 and S3 with their Stage 2
+# assumptions made optional; P1 and P4 are new, and both exist because Stage 3
+# is measured against a different row and moves in a constrained space.
+# --------------------------------------------------------------------------
+
+STAGE3_HEADS = ("fm_prelinear_ce", "fm_prelinear_guided")
+
+STAGE3_CURVES_CAPTION = (
+    "the two training losses are a cross-entropy and a velocity residual; their "
+    "values are not comparable, so the columns share no y axis. Selection is on "
+    "validation top-1 (ADR-028) and the dashed rule is the step the run kept"
+)
+
+DISPLACEMENT_CAPTION = (
+    "row(W) is the only part of the displacement the frozen probe can see, so the "
+    "null(W) fraction is capacity the loss cannot reward. fm_prelinear_guided is "
+    "confined to row(W) by construction and fm_prelinear_ce is not; both near zero, "
+    "or both large, falsifies that reading"
+)
+
+DISPLACEMENT_SCATTER_POINTS = 400
+
+
+def stage3_baseline() -> str:
+    """The row the Stage 3 lines are measured against, taken from the registry.
+
+    ADR-035 puts the answer on the head, which is what keeps this figure and
+    TABLE.md's dAcc column from disagreeing. Stage 1 and Stage 2 report against
+    the image prototype row; Stage 3 reports against the linear probe the block
+    sits in front of, and a panel that led with the prototypes would put the
+    reader's comparison on a number Stage 3 is not measured on.
+    """
+    baselines = {dacc_baseline(head) for head in STAGE3_HEADS}
+    if len(baselines) != 1 or "" in baselines:
+        raise ValueError(
+            f"the Stage 3 heads disagree about their baseline: {sorted(baselines)}; "
+            "P1 has no single row to draw the comparison against"
+        )
+    return baselines.pop()
+
+
+def stage3_lines(t_values) -> list[str]:  # noqa: ANN001
+    """P1's lines: the baseline first, then both strategies at each T.
+
+    The labels are `report.method_label`'s, `head@variant`. Stage 3 runs T as a
+    config variant, so `load_cells` already separates T=4 from T=12 and this
+    family needs none of the private aggregation Stage 2 had to build.
+    """
+    lines = [stage3_baseline()]
+    for head in STAGE3_HEADS:
+        lines += [f"{head}@T{int(t)}" for t in t_values]
+    return lines
+
+
+def check_stage3_lines(lines, baseline: str) -> None:  # noqa: ANN001
+    """Refuse a panel drawn against the wrong row before anything is plotted."""
+    lines = list(lines)
+    wrong = [line for line in lines if head_key(line) == "prototype"]
+    if wrong:
+        raise ValueError(
+            f"the prototype row {wrong} is Stage 1's and Stage 2's baseline, not "
+            f"Stage 3's; P1 is drawn against {baseline!r} (ADR-035)"
+        )
+    if not lines or lines[0] != baseline:
+        first = lines[0] if lines else "no lines at all"
+        raise ValueError(
+            f"P1's first line has to be {baseline!r}, the row the Stage 3 heads are "
+            f"measured against (ADR-035); got {first}"
+        )
+
+
+def plot_stage3_size_curve(
+    *, cells, dataset: str, encoder: str, lines, out: Path,
+    marked_k: str | None = None, dpi: int = 200,
+) -> Path:
+    """P1. One panel per (dataset, encoder), the baseline drawn as the baseline.
+
+    The Main Comparison cell is marked here rather than drawn as its own figure,
+    so his required comparison and the extended grid are one picture and nobody
+    has to reconcile two.
+    """
+    baseline = stage3_baseline()
+    check_stage3_lines(lines, baseline)
+    series = size_curve_series(cells, dataset, encoder)
+    absent = [line for line in lines if line not in series]
+    if absent:
+        raise MissingRunError(
+            f"no cells for {absent} at ({dataset}, {encoder}); the Stage 3 figure "
+            "would be partial, so nothing was written"
+        )
+
+    fig, ax = plt.subplots(figsize=(5.8, 3.8), dpi=dpi)
+    if marked_k is not None:
+        if marked_k not in K_ORDER:
+            raise ValueError(f"the marked cell must be one of {K_ORDER}, got {marked_k!r}")
+        position = K_ORDER.index(marked_k)
+        ax.axvspan(position - 0.42, position + 0.42, color="#e6ecf2", zorder=0)
+        ax.annotate(
+            "Main Comparison", xy=(position, 1.0), xycoords=("data", "axes fraction"),
+            xytext=(0, -9), textcoords="offset points",
+            ha="center", fontsize=6, color="#4a5a68",
+        )
+    for index, line in enumerate(lines):
+        entry = series[line]
+        xs = [K_ORDER.index(label) for label in entry["x"]]
+        errs = [0.0 if e is None else e for e in entry["yerr"]]
+        is_baseline = line == baseline
+        ax.errorbar(
+            xs, entry["y"], yerr=errs, capsize=3, label=line, zorder=3,
+            marker="s" if is_baseline else "o",
+            linestyle="--" if is_baseline else "-",
+            linewidth=1.7 if is_baseline else 1.1,
+            color="#333333" if is_baseline else PALETTE[(index - 1) % len(PALETTE)],
+        )
+    ax.set_xticks(list(range(len(K_ORDER))))
+    ax.set_xticklabels(K_ORDER)
+    ax.set_xlabel("training images per class (K)")
+    ax.set_ylabel("top-1 accuracy, official test split")
+    ax.set_title(f"{dataset} / {encoder}")
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=7)
+    fig.text(
+        0.5, 0.005,
+        f"the dashed line is {baseline}, the row Stage 3 is measured against "
+        "(ADR-035), not the image prototypes Stage 1 and Stage 2 report on",
+        ha="center", fontsize=6,
+    )
+    fig.tight_layout()
+    return _save(fig, out)
+
+
+def reduced_probe(projector, weight, bias):  # noqa: ANN001, ANN201
+    """The frozen probe restricted to the two plotted components, or None.
+
+    A PCA embeds z as u = (z - mean_) components_^T, so the plane's preimage is
+    z = mean_ + u components_ and
+
+        W z + b = u (W components_^T) + (W mean_ + b),
+
+    a linear rule in the plotted coordinates and therefore a boundary that can
+    honestly be drawn on the panel. None when the projector exposes no such map:
+    a t-SNE panel has no linear preimage to substitute, so P3 draws nothing
+    rather than drawing it somewhere it does not belong.
+    """
+    components = getattr(projector, "components_", None)
+    mean = getattr(projector, "mean_", None)
+    if components is None or mean is None:
+        return None
+    w = as_array(weight).astype(np.float64)
+    reduced_weight = w @ as_array(components).astype(np.float64).T
+    reduced_bias = w @ as_array(mean).astype(np.float64) + as_array(bias).astype(np.float64)
+    return reduced_weight, reduced_bias
+
+
+def displacement_scatter_rows(n: int, limit: int) -> np.ndarray:
+    """Evenly spaced rows of a point cloud, never a random draw.
+
+    P4's right panel is one point per test example and the split is too large to
+    read at that density. A subsample drawn from an RNG would regenerate
+    identically only as long as nothing else touched the same stream, and these
+    figures have to be byte-identical on regeneration.
+    """
+    if n <= limit:
+        return np.arange(n)
+    return np.unique(np.linspace(0, n - 1, limit).round().astype(np.int64))
+
+
+def plot_displacement(
+    *, groups, title: str, out: Path, dpi: int = 200,
+    scatter_points: int = DISPLACEMENT_SCATTER_POINTS,
+) -> Path:
+    """P4. Where the displacement went, and what it bought (ADR-036).
+
+    Left, each component's norm as a fraction of the total: only the row(W) part
+    can change a logit, so the null(W) fraction is capacity spent where the loss
+    cannot see it. Right, the change in the frozen classifier's margin against
+    the row-space displacement that produced it.
+
+    The numbers arrive from the run's stored `rowspace.json` and are never
+    recomputed here, so the figure and the number in the phase note cannot
+    disagree.
+    """
+    fig, (left, right) = plt.subplots(1, 2, figsize=(11.2, 4.3), dpi=dpi)
+
+    data, positions, faces, ticks, tick_labels, notes = [], [], [], [], [], []
+    for index, group in enumerate(groups):
+        base = 2.0 * index
+        data += [np.asarray(group["row_fraction"]), np.asarray(group["null_fraction"])]
+        positions += [base, base + 0.75]
+        faces += [PALETTE[index % len(PALETTE)], "#ffffff"]
+        ticks.append(base + 0.375)
+        tick_labels.append(group["name"])
+        if group.get("undefined"):
+            notes.append(f"{group['name']}: {group['undefined']} examples were not moved")
+
+    boxes = left.boxplot(
+        data, positions=positions, widths=0.62, patch_artist=True,
+        medianprops={"color": "#222222", "linewidth": 1.2},
+        flierprops={"marker": ".", "markersize": 2, "alpha": 0.4},
+    )
+    for patch, face in zip(boxes["boxes"], faces, strict=True):
+        patch.set_facecolor(face)
+        patch.set_edgecolor("#333333")
+        patch.set_alpha(0.9)
+    left.set_xticks(ticks)
+    left.set_xticklabels(tick_labels, fontsize=7)
+    left.set_ylim(0.0, 1.0)
+    left.set_ylabel("component norm as a fraction of the displacement")
+    left.set_title("where the displacement went", fontsize=9)
+    left.grid(alpha=0.3, axis="y")
+    left.legend(
+        handles=[
+            Patch(facecolor="#9a9a9a", edgecolor="#333333", label="row(W), the visible part"),
+            Patch(facecolor="#ffffff", edgecolor="#333333", label="null(W), the invisible part"),
+        ],
+        fontsize=6, loc="best", framealpha=0.85,
+    )
+    if notes:
+        left.set_xlabel("; ".join(notes), fontsize=6)
+
+    for index, group in enumerate(groups):
+        row_norm = np.asarray(group["row_norm"])
+        rows = displacement_scatter_rows(row_norm.shape[0], scatter_points)
+        right.scatter(
+            row_norm[rows], np.asarray(group["margin_change"])[rows],
+            s=9, alpha=0.5, linewidths=0, color=PALETTE[index % len(PALETTE)],
+            label=group["name"],
+        )
+    right.axhline(0.0, color="#888888", linewidth=0.8, linestyle="--")
+    right.set_xlabel("row(W) displacement norm")
+    right.set_ylabel("change in the frozen probe's margin")
+    right.set_title("what it bought", fontsize=9)
+    right.grid(alpha=0.3)
+    right.legend(fontsize=6, loc="best", framealpha=0.85)
+
+    fig.suptitle(title, fontsize=10)
+    fig.text(0.5, 0.005, DISPLACEMENT_CAPTION, ha="center", fontsize=6)
+    fig.tight_layout()
+    return _save(fig, out)
+
+
 __all__ = [
+    "DISPLACEMENT_CAPTION",
     "MissingRunError",
     "PNG_METADATA",
+    "SELECTION_CAPTION",
     "STAGE2_HEADS",
+    "STAGE3_CURVES_CAPTION",
+    "STAGE3_HEADS",
+    "as_array",
+    "check_stage3_lines",
     "class_colors",
+    "displacement_scatter_rows",
     "confusion_matrix",
     "feature_space_inputs",
     "k_label",
     "make_projector",
     "plot_confusion",
+    "plot_displacement",
     "plot_feature_panels",
     "plot_feature_space",
     "plot_loss_curves",
     "plot_size_curve",
     "plot_selection",
     "plot_stage2_loss_curves",
+    "plot_stage3_size_curve",
     "plot_trajectory_panels",
+    "project_blocks",
     "project_jointly",
     "prototypes_for",
+    "read_loss_curve",
+    "read_selection",
+    "reduced_probe",
     "require_cells",
     "scheme_label",
     "size_curve_series",
     "stability_note",
+    "stage3_baseline",
+    "stage3_lines",
     "top_confusions",
     "validate_viz_classes",
     "viz_test_rows",
