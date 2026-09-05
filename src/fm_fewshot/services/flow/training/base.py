@@ -35,6 +35,11 @@ from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 # per-row payload the caller paired with x0: endpoints in Stage 2, labels in
 # Stage 3.
 BatchLoss = Callable[[VelocityMLP, Tensor, Tensor, torch.Generator], Tensor]
+# (field, rows, batch_x0) -> batch_x1. The coupling seam: a scheme whose target
+# is not known before training returns it here, per step, under no_grad. Both
+# Stage 2 schemes pass None. `rows` is handed over so a coupler can cache the
+# target for the whole training set and slice it between recomputes.
+Coupling = Callable[[VelocityMLP, Tensor, Tensor], Tensor]
 # (1-based step, global gradient norm) -> None. See `train_field`.
 StepObserver = Callable[[int, float], None]
 
@@ -173,6 +178,7 @@ def train_field(
     batch_loss: BatchLoss,
     selector: ValidationSelector | None = None,
     *,
+    couple: Coupling | None = None,
     hidden_dims: tuple[int, ...] = (512, 512),
     time_conditioning: str = "scalar",
     n_train_steps: int = 2000,
@@ -199,6 +205,15 @@ def train_field(
     Everything after them is the training configuration both schemes share.
     With no selector, or one built with `eval_every = 0`, the field returned is
     the field the last optimizer step left.
+
+    `couple` replaces the per-row payload with an endpoint computed from the
+    field as it currently stands, once per step and under no_grad. It is the
+    one seam Stage 3 needed: Strategy 2's coupling is rebuilt from the frozen
+    classifier's gradient as training proceeds, so it cannot be an argument
+    fixed before the loop starts. With `couple=None`, the default and what both
+    Stage 2 schemes pass, the loop consumes the generator and reads `x1`
+    exactly as it did before the hook existed, which `test_classifier_guided`
+    asserts against digests taken beforehand.
 
     `zero_output_init` is Stage 3's near-identity start (ADR-030) and defaults
     to off, which is the Stage 2 field. `output_projector` is the row-space
@@ -240,7 +255,17 @@ def train_field(
 
     for step in range(n_train_steps):
         rows = torch.randint(0, x0.shape[0], (batch_size,), generator=generator)
-        loss = batch_loss(field, x0[rows], x1[rows], generator)
+        batch_x0 = x0[rows]
+        if couple is None:
+            batch_x1 = x1[rows]
+        else:
+            # Evaluated here rather than inside the loss so the loop's own
+            # account of the coupling stays true: Stage 3's Strategy 2 has a
+            # target that moves, and hiding that in a closure would leave this
+            # function claiming a fixed pairing it no longer has.
+            with torch.no_grad():
+                batch_x1 = couple(field, rows, batch_x0)
+        loss = batch_loss(field, batch_x0, batch_x1, generator)
         if not torch.isfinite(loss):
             raise ValueError(f"non-finite training loss at step {step}")
         optimizer.zero_grad()
