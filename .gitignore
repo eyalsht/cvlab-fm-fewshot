@@ -11,6 +11,10 @@
 
 # course material and local media
 /references/
+# The supervisor's stage specifications, whatever directory they are dropped
+# in. His material, like everything else in references/; they are transcribed
+# into docs/notes/teacher_stage*_writeup.md, which is what the work cites.
+stage_*.pdf
 /vid2*
 *.mp4
 *.wav
