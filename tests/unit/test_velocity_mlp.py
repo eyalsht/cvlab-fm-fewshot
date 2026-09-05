@@ -6,6 +6,7 @@ two hidden layers of width 512; our sinusoidal embedding survives as the
 ablation (ADR-019), so both paths are tested here side by side.
 """
 
+import hashlib
 import math
 
 import pytest
@@ -144,3 +145,103 @@ class TestSinusoidalEmbedding:
         assert torch.allclose(embedded[0, :4], torch.zeros(4), atol=1e-6)
         assert torch.allclose(embedded[0, 4:], torch.ones(4), atol=1e-6)
         assert math.isclose(float(embedded.sum()), 4.0, abs_tol=1e-5)
+
+
+class TestZeroOutputInit:
+    """ADR-030: the untrained Stage 3 system must be the linear probe exactly.
+
+    Zeroing the output layer makes `v_theta(z, t) = 0` everywhere, so T Euler
+    steps leave every feature where it started and `W zhat + b` is `W z + b`.
+    The write-up asks for "close to identity"; this is identity, which a test
+    can assert instead of an approximation someone has to eyeball.
+
+    The flag defaults to False and the False path must stay bit-identical to
+    every Stage 2 field ever fitted, so the digests below are pinned rather
+    than compared against a second construction: a change to the seeded init
+    would move both sides of a self-comparison together and pass.
+    """
+
+    # sha256 over the sorted state dict, computed before zero_output_init existed.
+    SCALAR_DIGEST = "c6ce8e2057e781d12f69c806de9d184f1d79705746bb09c6a65f45016e1fa0ea"
+    SINUSOIDAL_DIGEST = "13dec0530c278c4240ace48e31b348a89a256f5523e6198908bcaadaad9ab3b5"
+
+    @staticmethod
+    def _digest(net: VelocityMLP) -> str:
+        digest = hashlib.sha256()
+        for name, tensor in sorted(net.state_dict().items()):
+            digest.update(name.encode("utf-8"))
+            digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+        return digest.hexdigest()
+
+    def test_the_flag_defaults_to_off(self) -> None:
+        assert VelocityMLP(dim=4, hidden_dims=(8,), seed=0).zero_output_init is False
+
+    @pytest.mark.parametrize("dim", [1, 8, 33])
+    def test_the_field_is_zero_for_every_input(self, dim: int) -> None:
+        net = VelocityMLP(dim=dim, hidden_dims=(16, 16), seed=0, zero_output_init=True)
+        g = torch.Generator().manual_seed(11)
+        z = torch.randn(7, dim, generator=g) * 100.0
+        t = torch.rand(7, generator=g)
+        assert torch.equal(net(z, t), torch.zeros(7, dim))
+
+    def test_it_is_zero_under_the_sinusoidal_conditioning_too(self) -> None:
+        net = VelocityMLP(
+            dim=6,
+            hidden_dims=(16,),
+            time_conditioning="sinusoidal",
+            seed=2,
+            zero_output_init=True,
+        )
+        z, t = torch.randn(4, 6), torch.rand(4)
+        assert torch.equal(net(z, t), torch.zeros(4, 6))
+
+    def test_only_the_output_layer_is_zeroed(self) -> None:
+        """The hidden layers keep their seeded values, so the first step moves.
+
+        A network zeroed throughout would have no gradient anywhere and would
+        never leave the identity. The output layer's gradient is delta (x) h
+        with h the penultimate activation, which is nonzero here.
+        """
+        net = VelocityMLP(dim=5, hidden_dims=(16, 16), seed=0, zero_output_init=True)
+        linears = [m for m in net.net if isinstance(m, torch.nn.Linear)]
+        assert torch.equal(linears[-1].weight, torch.zeros_like(linears[-1].weight))
+        assert torch.equal(linears[-1].bias, torch.zeros_like(linears[-1].bias))
+        for hidden in linears[:-1]:
+            assert hidden.weight.abs().sum() > 0
+            assert hidden.bias.abs().sum() > 0
+
+    def test_the_zeroed_field_trains_off_zero_in_one_step(self) -> None:
+        net = VelocityMLP(dim=5, hidden_dims=(16, 16), seed=0, zero_output_init=True)
+        optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
+        z, t = torch.randn(8, 5), torch.rand(8)
+        loss = ((net(z, t) - torch.ones(8, 5)) ** 2).sum(dim=1).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        assert net(z, t).abs().sum() > 0
+
+    def test_the_default_path_reproduces_the_stage_2_initialization(self) -> None:
+        net = VelocityMLP(dim=8, hidden_dims=(16, 16), time_conditioning="scalar", seed=0)
+        assert self._digest(net) == self.SCALAR_DIGEST
+
+    def test_the_default_path_is_unchanged_under_sinusoidal_conditioning(self) -> None:
+        net = VelocityMLP(
+            dim=8, hidden_dims=(16, 16), time_conditioning="sinusoidal", seed=3
+        )
+        assert self._digest(net) == self.SINUSOIDAL_DIGEST
+
+    def test_zeroing_consumes_the_generator_identically(self) -> None:
+        """The flag changes the output layer, not the random stream.
+
+        Every layer is drawn first and the output layer zeroed afterwards, so
+        the hidden weights of a zeroed field are the hidden weights of the
+        Stage 2 field at the same seed. Anything else would make ADR-030 a
+        silent reinitialization of the whole network.
+        """
+        plain = VelocityMLP(dim=6, hidden_dims=(16, 16), seed=5)
+        zeroed = VelocityMLP(dim=6, hidden_dims=(16, 16), seed=5, zero_output_init=True)
+        plain_linears = [m for m in plain.net if isinstance(m, torch.nn.Linear)]
+        zeroed_linears = [m for m in zeroed.net if isinstance(m, torch.nn.Linear)]
+        for a, b in zip(plain_linears[:-1], zeroed_linears[:-1], strict=True):
+            assert torch.equal(a.weight, b.weight)
+            assert torch.equal(a.bias, b.bias)

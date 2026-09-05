@@ -12,6 +12,13 @@ that ignores t still trains and still transports, so the failure would be
 silent. His is what runs; ours is the ablation, and
 test_velocity_mlp asserts a fitted scalar field is not time-invariant rather
 than leaving the risk to argument.
+
+`zero_output_init` is Stage 3's near-identity initialization (ADR-030). Zeroing
+the output layer gives v_theta(z, t) = 0 for every z and t, so T Euler steps
+leave a feature where it started and the untrained Stage 3 system is exactly
+the linear probe it sits in front of. The write-up asks for "close to
+identity"; this makes it an equality a test can assert. It defaults to False,
+which is bit-identically the Stage 2 initialization.
 """
 
 import math
@@ -42,6 +49,7 @@ class VelocityMLP(nn.Module):
         time_conditioning: str = "scalar",
         time_embed_dim: int = 64,
         seed: int = 0,
+        zero_output_init: bool = False,
     ) -> None:
         super().__init__()
         if time_conditioning not in TIME_CONDITIONINGS:
@@ -54,6 +62,7 @@ class VelocityMLP(nn.Module):
         self.dim = dim
         self.time_conditioning = time_conditioning
         self.time_embed_dim = time_embed_dim
+        self.zero_output_init = zero_output_init
 
         generator = torch.Generator().manual_seed(seed)
         layers: list[nn.Module] = []
@@ -64,7 +73,14 @@ class VelocityMLP(nn.Module):
             layers += [linear, nn.SiLU()]
             width = hidden
         out = nn.Linear(width, dim)
+        # Drawn from the generator either way, then zeroed, so the flag changes
+        # the output layer and not the random stream: a zeroed field's hidden
+        # weights are the Stage 2 field's hidden weights at the same seed.
         _seeded_init(out, generator)
+        if zero_output_init:
+            with torch.no_grad():
+                out.weight.zero_()
+                out.bias.zero_()
         layers.append(out)
         self.net = nn.Sequential(*layers)
 
