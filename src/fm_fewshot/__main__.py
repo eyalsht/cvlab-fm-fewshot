@@ -1,4 +1,4 @@
-"""Command-line dispatch: features | run | sweep | report | figures | reverse | diagnose.
+"""Command-line dispatch: features | run | sweep | report | figures | reverse | diagnose | rowspace.
 
 Thin argument parsing only; behavior lives behind the sdk.
 """
@@ -7,6 +7,9 @@ import argparse
 from pathlib import Path
 
 from fm_fewshot import sdk
+from fm_fewshot.services.evaluation.rowspace_diagnostics import (
+    DEFAULT_MAX_POINTS as ROWSPACE_DEFAULT_MAX_POINTS,
+)
 from fm_fewshot.services.evaluation.scale_diagnostics import DEFAULT_MAX_POINTS
 from fm_fewshot.shared.gatekeeper import HeavyJobOnCpuError
 
@@ -78,6 +81,22 @@ def _diagnose_parser(subparsers) -> None:  # noqa: ANN001
     p.add_argument("--max-points", type=int, default=DEFAULT_MAX_POINTS)
 
 
+def _rowspace_parser(subparsers) -> None:  # noqa: ANN001
+    p = subparsers.add_parser(
+        "rowspace",
+        help="ADR-036 row(W)/null(W) displacement split for a Stage 3 run (never in TABLE.md)",
+    )
+    p.add_argument("--config", type=Path, required=True)
+    p.add_argument("--data-root", type=Path, default=Path("data"))
+    p.add_argument("--results-dir", type=Path, default=Path("results"))
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help="the stored run to annotate; found from the config when omitted",
+    )
+    p.add_argument("--max-points", type=int, default=ROWSPACE_DEFAULT_MAX_POINTS)
+
+
 def _report_parser(subparsers) -> None:  # noqa: ANN001
     p = subparsers.add_parser("report", help="regenerate results/TABLE.md")
     p.add_argument("--results-dir", type=Path, default=Path("results"))
@@ -114,6 +133,7 @@ def main(argv: list[str] | None = None) -> None:
     _figures_parser(subparsers)
     _reverse_parser(subparsers)
     _diagnose_parser(subparsers)
+    _rowspace_parser(subparsers)
     args = parser.parse_args(argv)
 
     if args.command == "features":
@@ -211,6 +231,25 @@ def main(argv: list[str] | None = None) -> None:
 
         try:
             path = sdk.run_diagnostics(
+                load_config(args.config),
+                data_root=args.data_root,
+                results_dir=args.results_dir,
+                run_id=args.run_id,
+                max_points=args.max_points,
+            )
+        except (MissingRunError, NotAnFmRunError, ValueError) as error:
+            raise SystemExit(str(error)) from error
+        print(path)
+
+    elif args.command == "rowspace":
+        from fm_fewshot.services.evaluation.rowspace_diagnostics import (
+            MissingRunError,
+            NotAnFmRunError,
+        )
+        from fm_fewshot.shared.config import load_config
+
+        try:
+            path = sdk.run_rowspace_diagnostics(
                 load_config(args.config),
                 data_root=args.data_root,
                 results_dir=args.results_dir,

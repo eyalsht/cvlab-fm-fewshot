@@ -10,6 +10,7 @@ from fm_fewshot.services.evaluation.loop import run_experiment
 from fm_fewshot.services.evaluation.make_figures import make_figures
 from fm_fewshot.services.evaluation.make_stage2_figures import make_stage2_figures
 from fm_fewshot.services.evaluation.reverse_run import run_reverse
+from fm_fewshot.services.evaluation.rowspace_diagnostics import run_rowspace_diagnostics
 from fm_fewshot.services.evaluation.scale_diagnostics import run_diagnostics
 from fm_fewshot.services.evaluation.sweep import run_sweep
 from fm_fewshot.services.features import cache
@@ -22,6 +23,7 @@ __all__ = [
     "run_diagnostics",
     "run_experiment",
     "run_reverse",
+    "run_rowspace_diagnostics",
     "run_sweep",
 ]
 
