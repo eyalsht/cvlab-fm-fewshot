@@ -31,6 +31,9 @@ from torch import Tensor
 from fm_fewshot.services.flow.solver import solve_ode
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 
+# (field, batch_x0, batch_x1, generator) -> scalar loss. batch_x1 is whatever
+# per-row payload the caller paired with x0: endpoints in Stage 2, labels in
+# Stage 3.
 BatchLoss = Callable[[VelocityMLP, Tensor, Tensor, torch.Generator], Tensor]
 # (1-based step, global gradient norm) -> None. See `train_field`.
 StepObserver = Callable[[int, float], None]
@@ -48,6 +51,21 @@ def _gradient_norm(field: VelocityMLP) -> float:
         if parameter.grad is not None:
             total = total + parameter.grad.detach().pow(2).sum()
     return float(total.sqrt())
+
+
+def require_paired_endpoints(x0: Tensor, x1: Tensor) -> None:
+    """Refuse a coupling whose two endpoints do not live in the same space.
+
+    The loop itself checks only the row count, because Stage 3 pairs each
+    feature with a label rather than with an endpoint. A scheme whose payload
+    really is the other end of a transport calls this, so the mismatch is
+    still caught at the door and named for what it is.
+    """
+    if x0.shape != x1.shape:
+        raise ValueError(
+            "paired endpoints must match in shape, got "
+            f"{tuple(x0.shape)} and {tuple(x1.shape)}"
+        )
 
 
 class Classifier(Protocol):
@@ -161,9 +179,18 @@ def train_field(
     batch_size: int = 64,
     lr: float = 1e-3,
     init_seed: int = 0,
+    zero_output_init: bool = False,
     on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta on the paired coupling (x0[i] -> x1[i]); return it and its loss curve.
+
+    `x1` is the per-row payload paired with `x0`, and what it holds is the
+    objective's business. Both Stage 2 schemes pass endpoints, [N, D] against
+    [N, D], and both Stage 3 strategies pass labels, [N], because neither has an
+    endpoint that exists before training starts: Strategy 1 optimizes a decision
+    rather than a destination, and Strategy 2 rebuilds its target as the field
+    moves. Only the row count is checked here; a loss that is handed the wrong
+    shape fails in its own terms, where the error names the objective.
 
     `selector` is passed positionally, next to the loss, because those two are
     the only arguments that carry anything scheme-specific: the loss is the
@@ -172,15 +199,19 @@ def train_field(
     With no selector, or one built with `eval_every = 0`, the field returned is
     the field the last optimizer step left.
 
+    `zero_output_init` is Stage 3's near-identity start (ADR-030) and defaults
+    to off, which is the Stage 2 field. It reaches the network and nothing
+    else: the loop, the optimizer and the batch stream do not read it.
+
     `on_step` is a diagnostic and defaults to off. When given, it is handed the
     1-based step number and the global gradient norm, read after `backward` and
     before `optimizer.step()`, which is the only point at which the gradient
     the optimizer is about to apply exists. It reads buffers and consumes no
     randomness, so an observed fit stays bit-identical to an unobserved one.
     """
-    if x0.shape != x1.shape:
+    if x0.shape[0] != x1.shape[0]:
         raise ValueError(
-            "paired endpoints must match in shape, got "
+            "the per-row payload must have one row per source point, got "
             f"{tuple(x0.shape)} and {tuple(x1.shape)}"
         )
     if n_train_steps < 0:
@@ -193,6 +224,7 @@ def train_field(
         hidden_dims=tuple(hidden_dims),
         time_conditioning=time_conditioning,
         seed=init_seed,
+        zero_output_init=zero_output_init,
     )
     if n_train_steps == 0:
         return field, []

@@ -38,6 +38,7 @@ from fm_fewshot.services.flow.solver import VelocityField
 from fm_fewshot.services.flow.training.base import (
     StepObserver,
     ValidationSelector,
+    require_paired_endpoints,
     train_field,
     transport,
 )
@@ -83,6 +84,7 @@ def train_rolled_out_field(
     """Fit v_theta by rolling the solver out over the paired coupling (x0[i] -> x1[i])."""
     if sample_steps < 1:
         raise ValueError(f"sample_steps must be >= 1, got {sample_steps}")
+    require_paired_endpoints(x0, x1)
 
     def batch_loss(
         field: VelocityMLP, batch_x0: Tensor, batch_x1: Tensor, generator: torch.Generator

@@ -22,6 +22,7 @@ from fm_fewshot.services.flow.objective import cfm_loss
 from fm_fewshot.services.flow.training.base import (
     StepObserver,
     ValidationSelector,
+    require_paired_endpoints,
     train_field,
     transport,
     transport_trajectory,
@@ -45,6 +46,7 @@ def train_standard_field(
     on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta simulation-free on the paired coupling (x0[i] -> x1[i])."""
+    require_paired_endpoints(x0, x1)
 
     def batch_loss(
         field: VelocityMLP, batch_x0: Tensor, batch_x1: Tensor, generator: torch.Generator

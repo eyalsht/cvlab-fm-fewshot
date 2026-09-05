@@ -71,6 +71,25 @@ class LinearProbeHead(FewShotHead):
         return list(self._epochs)
 
     @property
+    def weight(self) -> Tensor:
+        """W of the fitted map, [C, D]. Detached: the selected checkpoint is a fact.
+
+        Public because Stage 3 trains a block in front of this map and its two
+        strategies both read W, one to backpropagate a cross-entropy through it
+        and one to build a target from its rows (ADR-031).
+        """
+        if self._weight is None:
+            raise NotFittedError("weight is undefined before fit")
+        return self._weight
+
+    @property
+    def bias(self) -> Tensor:
+        """b of the fitted map, [C]."""
+        if self._bias is None:
+            raise NotFittedError("bias is undefined before fit")
+        return self._bias
+
+    @property
     def best_epoch(self) -> int:
         if self._best_epoch is None:
             raise NotFittedError("best_epoch is undefined before fit")
