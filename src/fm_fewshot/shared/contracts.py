@@ -77,6 +77,10 @@ class RunSummary:
     # e.g. prototype (ADR-024). Written to loss_curve.csv, not epochs.csv:
     # FM heads have one scalar loss and nothing to select.
     loss_history: list[float] = field(default_factory=list)
+    # sha256 of the fitted linear map, for heads that fit one: the Stage 1
+    # probe and both Stage 3 heads, which refit it internally (ADR-031). None
+    # for every other head, and for runs written before the field existed.
+    classifier_digest: str | None = None
 
 
 @dataclass(frozen=True)

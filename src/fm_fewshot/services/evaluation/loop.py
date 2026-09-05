@@ -103,6 +103,10 @@ def run_experiment(
         predict_seconds=predict_seconds,
         wall_seconds=time.perf_counter() - started,
         loss_history=list(getattr(head, "loss_history", [])),
+        # Duck-typed: only a head that fits a linear map has one. Recording it
+        # is what lets subset_check verify that a Stage 3 run transported into
+        # the same classifier its Stage 1 row reports (ADR-031).
+        classifier_digest=getattr(head, "classifier_digest", None),
     )
     # Only the head sees its own intermediate training steps, so a periodic
     # val_top1 in loss_curve.csv can only come from the head choosing to record

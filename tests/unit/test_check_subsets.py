@@ -16,7 +16,11 @@ from pathlib import Path
 
 import pytest
 
-from fm_fewshot.services.evaluation.subset_check import find_subset_disagreements, main
+from fm_fewshot.services.evaluation.subset_check import (
+    find_classifier_disagreements,
+    find_subset_disagreements,
+    main,
+)
 
 
 def write_run(
@@ -30,6 +34,7 @@ def write_run(
     k: int | None = 5,
     subset_seed: int = 0,
     init_seed: int = 0,
+    classifier_digest: str | None = None,
 ) -> Path:
     """One run directory holding the fields the guard reads, and nothing else."""
     run_dir = results_dir / run_id
@@ -37,6 +42,7 @@ def write_run(
     payload = {
         "run_id": run_id,
         "subset_idx": subset_idx,
+        "classifier_digest": classifier_digest,
         "config": {
             "dataset": dataset,
             "encoder": encoder,
@@ -171,3 +177,104 @@ class TestTheScript:
     def test_the_gate_runs_it(self) -> None:
         gate = (self.ROOT / "scripts" / "check").read_text(encoding="utf-8")
         assert "check_subsets" in gate
+
+
+class TestTheFrozenClassifierIsTheStage1Probe:
+    """TODO 10.6, the second half of the guard.
+
+    Stage 3's claim is that its two strategies transport into the same frozen
+    classifier the Stage 1 row reports, refitted at the same init_seed. Every
+    head that fits one records its digest, so the claim is checked by reading
+    finished summaries rather than trusted because ADR-031 says so.
+
+    The grouping is finer than the subset guard's by one field. The probe
+    depends on init_seed, and the full setting varies exactly that, so
+    (dataset, encoder, k, subset_seed) would compare three deliberately
+    different classifiers and fail on a correct grid.
+    """
+
+    def test_a_probe_and_two_stage_3_runs_agreeing_pass(self, tmp_path: Path) -> None:
+        results = tmp_path / "results"
+        for run_id, head in (
+            ("a_probe", "linear_probe"),
+            ("b_ce", "fm_prelinear_ce"),
+            ("c_guided", "fm_prelinear_guided"),
+        ):
+            write_run(results, run_id, subset_idx=[1, 4, 9], head=head, classifier_digest="abc")
+        assert find_classifier_disagreements(results) == []
+        assert main([str(results)]) == 0
+
+    def test_a_stage_3_run_that_refitted_a_different_classifier_is_named(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        results = tmp_path / "results"
+        write_run(results, "a_probe", subset_idx=[1, 4], head="linear_probe",
+                  classifier_digest="abc")
+        write_run(results, "b_ce", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="def")
+        disagreements = find_classifier_disagreements(results)
+        assert len(disagreements) == 1
+        assert main([str(results)]) == 1
+        printed = capsys.readouterr().out
+        assert "a_probe" in printed and "b_ce" in printed
+        assert "classifier" in printed
+
+    def test_the_full_setting_may_hold_three_different_classifiers(
+        self, tmp_path: Path
+    ) -> None:
+        """k=full varies init_seed, so the three probes differ by design."""
+        results = tmp_path / "results"
+        for seed, digest in enumerate(("aaa", "bbb", "ccc")):
+            write_run(
+                results,
+                f"probe_s{seed}",
+                subset_idx=[1, 4],
+                head="linear_probe",
+                k=None,
+                init_seed=seed,
+                classifier_digest=digest,
+            )
+        assert find_classifier_disagreements(results) == []
+
+    def test_the_full_setting_still_pairs_a_probe_with_its_own_stage_3_run(
+        self, tmp_path: Path
+    ) -> None:
+        results = tmp_path / "results"
+        write_run(results, "probe_s1", subset_idx=[1, 4], head="linear_probe", k=None,
+                  init_seed=1, classifier_digest="bbb")
+        write_run(results, "ce_s1", subset_idx=[1, 4], head="fm_prelinear_ce", k=None,
+                  init_seed=1, classifier_digest="zzz")
+        assert len(find_classifier_disagreements(results)) == 1
+
+    def test_runs_without_a_classifier_are_ignored(self, tmp_path: Path) -> None:
+        """A prototype or Stage 2 run fits no linear map and records no digest."""
+        results = tmp_path / "results"
+        write_run(results, "a_probe", subset_idx=[1, 4], head="linear_probe",
+                  classifier_digest="abc")
+        write_run(results, "b_prototype", subset_idx=[1, 4], head="prototype")
+        write_run(results, "c_fm_rolled", subset_idx=[1, 4], head="fm_rolled")
+        assert find_classifier_disagreements(results) == []
+        assert main([str(results)]) == 0
+
+    def test_a_run_written_before_the_digest_existed_is_reported_not_failed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The 156 Stage 1 and Stage 2 runs already in the store carry no digest.
+
+        They cannot bind the check and must not break it either; the count is
+        printed so it is visible that they do not.
+        """
+        results = tmp_path / "results"
+        write_run(results, "a_probe_old", subset_idx=[1, 4], head="linear_probe")
+        write_run(results, "b_ce", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="abc")
+        assert main([str(results)]) == 0
+        assert "1 head that fits a classifier carries no digest" in capsys.readouterr().out
+
+    def test_one_recorded_classifier_alone_is_not_a_disagreement(
+        self, tmp_path: Path
+    ) -> None:
+        results = tmp_path / "results"
+        write_run(results, "a_ce", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="abc")
+        assert find_classifier_disagreements(results) == []

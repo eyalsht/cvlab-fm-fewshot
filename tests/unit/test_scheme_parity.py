@@ -47,9 +47,15 @@ import torch
 from test_head_contract import make_config
 
 from fm_fewshot.services.flow.objective import cfm_loss
+from fm_fewshot.services.flow.training import classifier_guided as guided_module
 from fm_fewshot.services.flow.training import rolled_out as rolled_module
+from fm_fewshot.services.flow.training import rolled_out_ce as ce_module
 from fm_fewshot.services.flow.training import standard as standard_module
 from fm_fewshot.services.flow.training.base import ValidationSelector, train_field
+from fm_fewshot.services.flow.training.classifier_guided import (
+    ClassifierGuidedCoupler,
+    GuidedTargetConfig,
+)
 from fm_fewshot.services.flow.training.rolled_out import rolled_out_loss
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 from fm_fewshot.services.heads.base import make_head
@@ -393,3 +399,216 @@ class TestStepCountEntersThroughSelection:
         for head in (self._head(4), self._head(12)):
             unselected = self._head(4, eval_every=0, n_train_steps=head.best_epoch)
             assert field_hash(head.field) == field_hash(unselected.field)
+
+
+STAGE3_PARAMS: dict[str, object] = dict(SHARED_PARAMS, probe_params={"max_epochs": 20})
+
+
+def both_stage3_heads(**overrides: object):
+    """One head per Stage 3 strategy, built from identical head_params."""
+    params = dict(STAGE3_PARAMS)
+    params.update(overrides)
+    return (
+        make_head(make_config("fm_prelinear_ce", **params), 3),
+        make_head(make_config("fm_prelinear_guided", **params), 3),
+    )
+
+
+class TestStage3IdenticalInitialization:
+    """The Stage 3 pair, held to what the Stage 2 pair is held to (TODO 10.6).
+
+    The write-up's fairness requirement carries over: architecture and the main
+    training choices are fixed across the comparison, so the loss is the only
+    thing that can explain a gap. Stage 3 adds a second shared object, the
+    frozen classifier, and it has to be the same classifier in both heads or
+    the two strategies are not solving the same problem.
+    """
+
+    def test_both_strategies_start_from_the_same_field(self) -> None:
+        train_x, train_y = problem()
+        ce, guided = both_stage3_heads(n_train_steps=0)
+        for head in (ce, guided):
+            head.fit(train_x, train_y, train_x, train_y)
+        for a, b in zip(ce.field.parameters(), guided.field.parameters(), strict=True):
+            assert torch.equal(a, b)
+
+    def test_both_strategies_start_from_identity(self) -> None:
+        """ADR-030, and the reason the initial fields agree trivially in part:
+        the output layer is zero in both, but the hidden layers are seeded and
+        must agree too."""
+        train_x, train_y = problem()
+        ce, guided = both_stage3_heads(n_train_steps=0)
+        for head in (ce, guided):
+            head.fit(train_x, train_y, train_x, train_y)
+            assert torch.equal(head.transport(train_x), train_x)
+
+    def test_both_strategies_fit_the_same_frozen_classifier(self) -> None:
+        train_x, train_y = problem()
+        ce, guided = both_stage3_heads(n_train_steps=0)
+        for head in (ce, guided):
+            head.fit(train_x, train_y, train_x, train_y)
+        assert torch.equal(ce.probe.weight, guided.probe.weight)
+        assert torch.equal(ce.probe.bias, guided.probe.bias)
+        assert ce.probe.classifier_digest == guided.probe.classifier_digest
+
+    def test_the_comparison_can_fail(self) -> None:
+        """Negative control on both halves, at two init seeds."""
+        train_x, train_y = problem()
+        params = dict(STAGE3_PARAMS, n_train_steps=0)
+        cfg = make_config("fm_prelinear_ce", **params)
+        head = make_head(cfg, 3)
+        other = make_head(replace(cfg, init_seed=1), 3)
+        head.fit(train_x, train_y, train_x, train_y)
+        other.fit(train_x, train_y, train_x, train_y)
+        assert head.probe.classifier_digest != other.probe.classifier_digest
+        assert any(
+            not torch.equal(a, b)
+            for a, b in zip(head.field.parameters(), other.field.parameters(), strict=True)
+        )
+
+
+class TestStage3IdenticalLoopArguments:
+    def _recorded(self, monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple]:
+        recorded: dict[str, tuple] = {}
+
+        def recorder(name: str):
+            def fake_train_field(x0, x1, batch_loss, selector=None, **kwargs):
+                recorded[name] = (x0, x1, selector, kwargs)
+                return VelocityMLP(dim=x0.shape[1], hidden_dims=(4,), seed=0), []
+
+            return fake_train_field
+
+        monkeypatch.setattr(ce_module, "train_field", recorder("ce"))
+        monkeypatch.setattr(guided_module, "train_field", recorder("guided"))
+
+        train_x, train_y = problem()
+        ce, guided = both_stage3_heads()
+        ce.fit(train_x, train_y, train_x, train_y)
+        guided.fit(train_x, train_y, train_x, train_y)
+        return recorded
+
+    def test_both_strategies_hand_the_loop_the_same_endpoints_and_configuration(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._recorded(monkeypatch)
+        ce_x0, ce_y, _, ce_kwargs = recorded["ce"]
+        guided_x0, guided_y, _, guided_kwargs = recorded["guided"]
+        assert torch.equal(ce_x0, guided_x0)
+        assert torch.equal(ce_y, guided_y)
+        # The coupling is the one keyword that legitimately differs: Strategy 2
+        # rebuilds its target and Strategy 1 has none. Everything else must agree.
+        assert ce_kwargs.pop("couple", None) is None
+        assert guided_kwargs.pop("couple") is not None
+        # And in the graded configuration neither field is projected: the
+        # row-space projection is an ablation, and switching it on is exactly
+        # the search-space difference this class exists to rule out.
+        assert ce_kwargs.pop("output_projector", None) is None
+        assert guided_kwargs.pop("output_projector", None) is None
+        assert ce_kwargs == guided_kwargs
+
+    def test_both_strategies_train_the_field_from_identity(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._recorded(monkeypatch)
+        assert recorded["ce"][3]["zero_output_init"] is True
+        assert recorded["guided"][3]["zero_output_init"] is True
+
+    def test_both_strategies_hand_the_loop_the_same_selection(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recorded = self._recorded(monkeypatch)
+        ce_selector, guided_selector = recorded["ce"][2], recorded["guided"][2]
+        assert type(ce_selector) is type(guided_selector) is ValidationSelector
+        assert ce_selector.eval_every == guided_selector.eval_every
+        assert ce_selector.sample_steps == guided_selector.sample_steps
+        assert torch.equal(ce_selector.val_x, guided_selector.val_x)
+        assert torch.equal(ce_selector.val_y, guided_selector.val_y)
+        # Same decision rule, and the same fitted one: both score with their own
+        # frozen probe, and the two probes are bit-identical (ADR-031).
+        assert (
+            ce_selector.classifier.classifier_digest
+            == guided_selector.classifier.classifier_digest
+        )
+
+
+class TestStage3IdenticalOptimizer:
+    def test_both_strategies_build_one_adam_with_the_same_settings(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        real_adam = torch.optim.Adam
+        seen: list[tuple[str, dict, list]] = []
+
+        class RecordingAdam(real_adam):  # type: ignore[misc, valid-type]
+            def __init__(self, params, **kwargs):
+                params = list(params)
+                super().__init__(params, **kwargs)
+                seen.append((type(self).__name__, dict(self.defaults),
+                             [tuple(p.shape) for p in params]))
+
+        monkeypatch.setattr(torch.optim, "Adam", RecordingAdam)
+
+        train_x, train_y = problem()
+        ce, guided = both_stage3_heads()
+        ce.fit(train_x, train_y, train_x, train_y)
+        guided.fit(train_x, train_y, train_x, train_y)
+
+        # One Adam per head over the field's parameters. The probe's own AdamW
+        # is a different optimizer on different tensors and is not counted here.
+        assert len(seen) == 2
+        assert seen[0] == seen[1]
+        assert seen[0][1]["lr"] == STAGE3_PARAMS["lr"]
+
+
+class TestStage3BatchStream:
+    """Same story as Stage 2: one row draw, then the streams part on the loss.
+
+    Strategy 2 samples t ~ U(0, 1) for its flow matching update and Strategy 1
+    draws nothing, so from batch 2 the two see different rows. The guard is
+    that the divergence comes from the objective and from nothing else, which
+    is why the target computation is asserted to consume no randomness.
+    """
+
+    def test_the_first_batch_is_the_same_rows_in_both_strategies(self) -> None:
+        seen: dict[str, list[int]] = {}
+
+        def record(name: str):
+            def couple_or_loss(field, batch_x0, batch_x1, generator):
+                seen.setdefault(name, [int(v) for v in batch_x0[:, 0].tolist()])
+                if name == "guided":
+                    torch.rand(batch_x0.shape[0], generator=generator)
+                times = torch.zeros(batch_x0.shape[0])
+                return ((field(batch_x0, times) - 1.0) ** 2).sum(dim=1).mean()
+
+            return couple_or_loss
+
+        x0 = torch.arange(16, dtype=torch.float32).unsqueeze(1).repeat(1, 2)
+        for name in ("ce", "guided"):
+            train_field(
+                x0,
+                torch.arange(16),
+                record(name),
+                hidden_dims=(4,),
+                n_train_steps=1,
+                batch_size=8,
+                init_seed=0,
+            )
+        assert seen["ce"] == seen["guided"]
+
+    def test_building_the_target_consumes_no_randomness(self) -> None:
+        """Otherwise the coupling, not the loss, would be moving the stream."""
+        train_x, train_y = problem()
+        weight = torch.randn(3, train_x.shape[1], generator=torch.Generator().manual_seed(1))
+        bias = torch.zeros(3)
+        coupler = ClassifierGuidedCoupler(
+            train_x,
+            train_y,
+            weight,
+            bias,
+            sample_steps=4,
+            config=GuidedTargetConfig(),
+        )
+        field = VelocityMLP(dim=train_x.shape[1], hidden_dims=(8,), seed=0)
+        generator = torch.Generator().manual_seed(0)
+        before = generator.get_state()
+        coupler(field, torch.arange(4), train_x[:4])
+        assert torch.equal(generator.get_state(), before)

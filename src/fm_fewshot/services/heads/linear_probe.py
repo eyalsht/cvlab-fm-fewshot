@@ -16,6 +16,8 @@ and the batch order, so the full setting's three initialization seeds vary the
 classifier while the training subset stays fixed (ADR-012).
 """
 
+import hashlib
+
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
@@ -88,6 +90,20 @@ class LinearProbeHead(FewShotHead):
         if self._bias is None:
             raise NotFittedError("bias is undefined before fit")
         return self._bias
+
+    @property
+    def classifier_digest(self) -> str:
+        """sha256 of the fitted (W, b), the fingerprint the run store carries.
+
+        Stage 3 refits this classifier inside its own head at the same
+        init_seed, so the two are bit-identical by construction (ADR-031). A
+        digest in each summary is what turns that from a claim in a document
+        into something `subset_check` can verify across finished runs.
+        """
+        digest = hashlib.sha256()
+        for tensor in (self.weight, self.bias):
+            digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
+        return digest.hexdigest()
 
     @property
     def best_epoch(self) -> int:

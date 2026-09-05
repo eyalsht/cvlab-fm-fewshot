@@ -147,6 +147,16 @@ class FmPreLinearHead(FewShotHead):
         return self._probe
 
     @property
+    def classifier_digest(self) -> str:
+        """The frozen probe's fingerprint, recorded so the run store can be checked.
+
+        Duck-typed, like `val_top1_history`: the loop reads it when a head has
+        one and records it in the summary, and `subset_check` compares it
+        against the Stage 1 probe's at the same setting.
+        """
+        return self._probe.classifier_digest
+
+    @property
     def zero_output_init(self) -> bool:
         return self._zero_output_init
 
