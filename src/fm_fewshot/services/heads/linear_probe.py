@@ -33,6 +33,9 @@ from fm_fewshot.shared.contracts import EpochRecord, ExperimentConfig
 
 @register("linear_probe")
 class LinearProbeHead(FewShotHead):
+    # Stage 1 reports the probe against the image prototypes (FR16).
+    dacc_baseline = "prototype"
+
     def __init__(
         self,
         n_classes: int,

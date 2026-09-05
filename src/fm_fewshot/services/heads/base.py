@@ -14,6 +14,7 @@ absent from this interface on purpose: a head has no route to it.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import ClassVar
 
 from torch import Tensor
 
@@ -34,6 +35,15 @@ class HeadContext:
 
 
 class FewShotHead(ABC):
+    # The registry key of the method this head's dAcc is reported against
+    # (ADR-035). The write-up names a different baseline per stage: Stage 2
+    # reports against the image prototypes, Stage 3 against the linear probe
+    # its block sits in front of. Declaring it here keeps that a property of
+    # the head, so `report` resolves it through the registry instead of
+    # learning which stage a head belongs to. Empty means no delta: the row is
+    # a baseline with nothing above it.
+    dacc_baseline: ClassVar[str] = ""
+
     @abstractmethod
     def fit(self, train_x: Tensor, train_y: Tensor, val_x: Tensor, val_y: Tensor) -> None:
         """Fit on the training subset; train_y holds global class ids in [0, C)."""
@@ -75,6 +85,18 @@ def register(key: str):  # noqa: ANN201 - decorator returns the class unchanged
 
 def registered_heads() -> tuple[str, ...]:
     return tuple(sorted(_REGISTRY))
+
+
+def dacc_baseline(head: str) -> str:
+    """What a row of this head is measured against; empty when nothing is.
+
+    Unknown keys answer empty rather than raising: `report` reads a stored run
+    store, which can hold a head this checkout no longer registers, and a
+    table that cannot be regenerated because of an old row would be worse than
+    one missing a delta.
+    """
+    head_class = _REGISTRY.get(head)
+    return head_class.dacc_baseline if head_class is not None else ""
 
 
 def make_head(

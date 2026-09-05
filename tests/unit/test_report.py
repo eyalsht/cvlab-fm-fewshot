@@ -1,11 +1,13 @@
 """Report tests per PRD_evaluation_protocol section 5."""
 
 import dataclasses
+import inspect
 import json
 from pathlib import Path
 
 import pytest
 
+from fm_fewshot.services.evaluation import report as report_module
 from fm_fewshot.services.evaluation.report import (
     IncompleteCellError,
     expected_runs,
@@ -181,3 +183,115 @@ class TestDeltaAccuracy:
         first = table.read_bytes()
         write_table(tmp_path, table)
         assert table.read_bytes() == first
+
+
+class TestStage3DeltaAccuracy:
+    """ADR-035: a row's baseline is a property of its head, not of the table.
+
+    Stage 2 reports against the prototype row and Stage 3 against the linear
+    probe, because the write-up says so for each. `report` must not learn that
+    as a branch on which stage a head belongs to; it asks the head, through the
+    registry, what it is measured against.
+    """
+
+    def test_a_stage_3_row_is_measured_against_the_linear_probe(
+        self, tmp_path: Path
+    ) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "linear_probe", [0.48, 0.50, 0.52])
+        write_cell(tmp_path, "fm_prelinear_ce", [0.53, 0.55, 0.57])
+        rows = table_rows(tmp_path)
+        assert rows["fm_prelinear_ce"] == "+0.050"
+
+    def test_both_stage_3_strategies_use_it(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "linear_probe", [0.48, 0.50, 0.52])
+        write_cell(tmp_path, "fm_prelinear_guided", [0.43, 0.45, 0.47])
+        assert table_rows(tmp_path)["fm_prelinear_guided"] == "-0.050"
+
+    def test_a_stage_2_row_still_uses_the_prototype(self, tmp_path: Path) -> None:
+        """The row Stage 3 must not disturb, in the same table as a Stage 3 row."""
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "linear_probe", [0.48, 0.50, 0.52])
+        write_cell(tmp_path, "fm_standard", [0.53, 0.55, 0.57])
+        write_cell(tmp_path, "fm_prelinear_ce", [0.53, 0.55, 0.57])
+        rows = table_rows(tmp_path)
+        assert rows["fm_standard"] == "+0.150"
+        assert rows["fm_prelinear_ce"] == "+0.050"
+
+    def test_the_probe_row_keeps_its_own_delta_against_the_prototype(
+        self, tmp_path: Path
+    ) -> None:
+        """Stage 1's table already reports this and the stored TABLE.md carries
+        it, so making the probe a baseline must not blank its own row."""
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "linear_probe", [0.48, 0.50, 0.52])
+        assert table_rows(tmp_path)["linear_probe"] == "+0.100"
+
+    def test_a_variant_resolves_through_its_head_key(self, tmp_path: Path) -> None:
+        """The table labels a cell `head@variant`; the baseline is the head's."""
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "linear_probe", [0.48, 0.50, 0.52])
+        write_cell(tmp_path, "fm_prelinear_ce", [0.53, 0.55, 0.57], variant="T4")
+        assert table_rows(tmp_path)["fm_prelinear_ce@T4"] == "+0.050"
+
+    def test_a_missing_baseline_row_leaves_the_delta_blank(self, tmp_path: Path) -> None:
+        """No probe cell reported yet: blank, rather than a number report cannot
+        support or a fall back onto whichever baseline happens to exist."""
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_cell(tmp_path, "fm_prelinear_ce", [0.53, 0.55, 0.57])
+        assert table_rows(tmp_path)["fm_prelinear_ce"] == ""
+
+    def test_report_holds_no_per_stage_branch(self) -> None:
+        """The rule lives on the heads; `report` only resolves it.
+
+        Scoped to the delta path. `expected_runs` still names the prototype
+        head, and that stays: it is a protocol fact about run counts, not a
+        baseline rule, and the write-up ties it to that head by name.
+
+        Checked as string literals rather than as substrings: the header prose
+        names both baselines, which is the table explaining itself to a reader,
+        and a branch would need the key itself.
+        """
+        source = inspect.getsource(report_module._dacc) + inspect.getsource(
+            report_module._cell_means
+        )
+        for head in (
+            "prototype",
+            "linear_probe",
+            "fm_standard",
+            "fm_rolled",
+            "fm_prelinear_ce",
+            "fm_prelinear_guided",
+        ):
+            assert f'"{head}"' not in source
+            assert f"'{head}'" not in source
+
+
+class TestTheTitleNamesWhatTheTableHolds:
+    """The last open Stage 2 caveat, deferred from 10.0 to this commit."""
+
+    def test_the_title_is_not_stage_1_only(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_table(tmp_path, tmp_path / "TABLE.md")
+        first_line = (tmp_path / "TABLE.md").read_text().splitlines()[0]
+        assert first_line != "# Stage 1 results"
+        assert "results" in first_line.lower()
+
+    def test_the_header_explains_both_baselines(self, tmp_path: Path) -> None:
+        write_cell(tmp_path, "prototype", [0.38, 0.40, 0.42])
+        write_table(tmp_path, tmp_path / "TABLE.md")
+        header = (tmp_path / "TABLE.md").read_text().split("|")[0]
+        assert "prototype" in header and "linear probe" in header
+
+
+def table_rows(results: Path) -> dict[str, str]:
+    """Every data row's method label mapped to its dAcc cell."""
+    write_table(results, results / "TABLE.md")
+    rows = {}
+    for line in (results / "TABLE.md").read_text().splitlines():
+        if not line.startswith("|") or line.startswith("|---") or "Dataset" in line:
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        rows[cells[2]] = cells[-1]
+    return rows

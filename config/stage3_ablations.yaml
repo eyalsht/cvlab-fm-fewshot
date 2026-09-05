@@ -1,0 +1,138 @@
+# Stage 3 ablations (G8). Run into ablations/, never results/:
+#
+#   uv run python -m fm_fewshot sweep --config config/stage3_ablations.yaml \
+#       --results-dir ablations
+#
+# report is never pointed at ablations/, which is what keeps these out of the
+# graded cells. Everything here is something the write-up invited rather than
+# specified ("you may also experiment with", "whether the target updates should
+# be normalized or otherwise constrained"), plus the two schemes proposed under
+# his licence clause, so by ADR-016's rule none of it is a graded row.
+#
+# Scoped to the two Main Comparison cells, (dtd, resnet18) and
+# (fgvc_aircraft, dinov2_vits14) at K=10, because these answer questions about
+# the graded rows rather than extending the grid.
+#
+# T is 4 here. Once 10.8 picks the Main Comparison's T on validation accuracy,
+# these move to that T so an ablation is read against the row it questions.
+
+datasets:
+  - dtd
+  - fgvc_aircraft
+
+encoders:
+  resnet18:
+    - dtd
+  dinov2_vits14:
+    - fgvc_aircraft
+
+ks:
+  - 10
+
+variants:
+  # ADR-034: the two penalties he names, against the graded lambda = 0 row.
+  - label: ce-disp0.01
+    head: fm_prelinear_ce
+    head_params: &stage3_training
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      lambda_disp: 0.01
+      lambda_vel: 0.0
+      project_velocity: false
+  - label: ce-disp0.1
+    head: fm_prelinear_ce
+    head_params:
+      <<: *stage3_training
+      lambda_disp: 0.1
+  - label: ce-vel0.01
+    head: fm_prelinear_ce
+    head_params:
+      <<: *stage3_training
+      lambda_disp: 0.0
+      lambda_vel: 0.01
+  - label: ce-vel0.1
+    head: fm_prelinear_ce
+    head_params:
+      <<: *stage3_training
+      lambda_disp: 0.0
+      lambda_vel: 0.1
+  # stage3_alignment 3.3: the control that puts Strategy 1 in Strategy 2's
+  # search space while keeping its objective. If it closes the gap, the
+  # difference between his two strategies is the constraint and not the loss.
+  - label: ce-rowspace
+    head: fm_prelinear_ce
+    head_params:
+      <<: *stage3_training
+      project_velocity: true
+  # ADR-033: his own open question, answered with numbers rather than assumed.
+  # The graded row is the unconstrained step; these bound it two ways.
+  - label: guided-norm-rho0.25
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: normalized
+      eta: 1.0
+      target_steps: 1
+      target_every: 1
+      rho: 0.25
+  - label: guided-norm-rho0.5
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: normalized
+      eta: 1.0
+      target_steps: 1
+      target_every: 1
+      rho: 0.5
+  # The cheaper, staler recompute he also allows, and a larger step, so the
+  # drift the graded row may show is measured against something.
+  - label: guided-raw-every50
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: raw
+      eta: 1.0
+      target_steps: 1
+      target_every: 50
+  - label: guided-raw-m3
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: raw
+      eta: 1.0
+      target_steps: 3
+      target_every: 1

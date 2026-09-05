@@ -69,6 +69,10 @@ DEFAULT_EVAL_EVERY = 50
 class FmHead(FewShotHead):
     """An FM block as the last layer. Subclasses differ only in `_fit_field`."""
 
+    # Stage 2 transports toward the image prototypes, so the prototype row is
+    # what its change is reported against (FR16).
+    dacc_baseline = "prototype"
+
     def __init__(
         self,
         n_classes: int,

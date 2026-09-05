@@ -29,6 +29,9 @@ from fm_fewshot.shared.contracts import ExperimentConfig
 
 @register("prototype")
 class PrototypeHead(FewShotHead):
+    # The Stage 1 and Stage 2 baseline itself; nothing sits under it.
+    dacc_baseline = ""
+
     def __init__(self, n_classes: int) -> None:
         self._n_classes = n_classes
         self._prototypes: Tensor | None = None  # [C, D], unit norm

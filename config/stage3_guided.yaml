@@ -1,0 +1,55 @@
+# Stage 3, Strategy 2 (classifier-guided targets, standard FM update), expanded
+# by services/evaluation/sweep.py.
+#
+# Same datasets, encoders, K and seeds as stage3_ce.yaml, because the two
+# strategies are compared cell for cell and against one linear-probe baseline.
+#
+# Two variants, not two heads: T in {4, 12}. The update itself never solves the
+# ODE, but T still reaches the fit twice over, through the rollout that builds
+# each target and through the selection metric, so the two variants are two
+# trained fields and not one field read at two resolutions (ADR-032).
+
+datasets:
+  - dtd
+  - fgvc_aircraft
+
+encoders:
+  resnet18:
+    - dtd
+    - fgvc_aircraft
+  dinov2_vits14:
+    - fgvc_aircraft
+
+ks:
+  - 5
+  - 10
+  - full
+
+# The training choices held fixed across the comparison, per the write-up's
+# fairness requirement. Every value in the shared block appears identically in
+# stage3_ce.yaml; if one moves, both move.
+variants:
+  - label: T4
+    head: fm_prelinear_guided
+    head_params: &stage3_training
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      # His step 6 read literally: the unconstrained gradient step, one per
+      # optimizer step, recomputed every time (ADR-033). It can drift, and the
+      # constrained version runs beside it in stage3_ablations.yaml rather than
+      # replacing it here.
+      target_step: raw
+      eta: 1.0
+      target_steps: 1
+      target_every: 1
+  - label: T12
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_training
+      sample_steps: 12

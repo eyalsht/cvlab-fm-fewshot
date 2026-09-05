@@ -63,6 +63,10 @@ from fm_fewshot.shared.contracts import ExperimentConfig
 class FmPreLinearHead(FewShotHead):
     """An FM block before a frozen linear probe. Subclasses differ only in `_fit_field`."""
 
+    # "Also report the change relative to the corresponding linear-probe
+    # baseline", which is the probe this block sits in front of (ADR-035).
+    dacc_baseline = "linear_probe"
+
     def __init__(
         self,
         n_classes: int,
