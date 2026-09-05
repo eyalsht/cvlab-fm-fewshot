@@ -1,0 +1,16 @@
+head,k,top1,std
+linear_probe,5,0.207221,0.003079
+linear_probe,10,0.266327,0.006691
+linear_probe,full,0.367937,0.002107
+fm_prelinear_ce@T4,5,0.202620,0.004504
+fm_prelinear_ce@T4,10,0.262626,0.002772
+fm_prelinear_ce@T4,full,0.373337,0.000866
+fm_prelinear_ce@T12,5,0.209521,0.002272
+fm_prelinear_ce@T12,10,0.266627,0.005743
+fm_prelinear_ce@T12,full,0.370937,0.004651
+fm_prelinear_guided@T4,5,0.205521,0.007537
+fm_prelinear_guided@T4,10,0.266327,0.007533
+fm_prelinear_guided@T4,full,0.368937,0.000458
+fm_prelinear_guided@T12,5,0.206821,0.004351
+fm_prelinear_guided@T12,10,0.268227,0.006350
+fm_prelinear_guided@T12,full,0.369737,0.003554
