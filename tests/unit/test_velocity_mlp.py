@@ -245,3 +245,33 @@ class TestZeroOutputInit:
         for a, b in zip(plain_linears[:-1], zeroed_linears[:-1], strict=True):
             assert torch.equal(a.weight, b.weight)
             assert torch.equal(a.bias, b.bias)
+
+
+class TestOutputProjector:
+    """The Stage 3 row-space control (stage3_alignment 3.3), carried by the field.
+
+    It lives here rather than inside a training loss because a field that
+    projected only while training would stop projecting the moment inference
+    integrated it, and the ablation would measure nothing.
+    """
+
+    def test_it_is_absent_by_default(self) -> None:
+        assert VelocityMLP(dim=4, hidden_dims=(8,), seed=0).output_projector is None
+
+    def test_every_velocity_lands_in_the_projected_subspace(self) -> None:
+        basis = torch.zeros(6, 6)
+        basis[0, 0] = basis[1, 1] = 1.0  # project onto the first two coordinates
+        net = VelocityMLP(dim=6, hidden_dims=(16,), seed=0, output_projector=basis)
+        velocity = net(torch.randn(5, 6), torch.rand(5))
+        assert torch.allclose(velocity[:, 2:], torch.zeros(5, 4), atol=1e-7)
+        assert velocity[:, :2].abs().sum() > 0
+
+    def test_it_travels_with_the_state_dict(self) -> None:
+        """A selected checkpoint must restore as the field it was scored as."""
+        basis = torch.eye(4)
+        net = VelocityMLP(dim=4, hidden_dims=(8,), seed=0, output_projector=basis)
+        assert "output_projector" in net.state_dict()
+        restored = VelocityMLP(dim=4, hidden_dims=(8,), seed=1, output_projector=basis)
+        restored.load_state_dict(net.state_dict())
+        z, t = torch.randn(3, 4), torch.rand(3)
+        assert torch.equal(restored(z, t), net(z, t))

@@ -180,6 +180,7 @@ def train_field(
     lr: float = 1e-3,
     init_seed: int = 0,
     zero_output_init: bool = False,
+    output_projector: Tensor | None = None,
     on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta on the paired coupling (x0[i] -> x1[i]); return it and its loss curve.
@@ -200,8 +201,9 @@ def train_field(
     the field the last optimizer step left.
 
     `zero_output_init` is Stage 3's near-identity start (ADR-030) and defaults
-    to off, which is the Stage 2 field. It reaches the network and nothing
-    else: the loop, the optimizer and the batch stream do not read it.
+    to off, which is the Stage 2 field. `output_projector` is the row-space
+    ablation's fixed projection. Both reach the network and nothing else: the
+    loop, the optimizer and the batch stream do not read either.
 
     `on_step` is a diagnostic and defaults to off. When given, it is handed the
     1-based step number and the global gradient norm, read after `backward` and
@@ -225,6 +227,7 @@ def train_field(
         time_conditioning=time_conditioning,
         seed=init_seed,
         zero_output_init=zero_output_init,
+        output_projector=output_projector,
     )
     if n_train_steps == 0:
         return field, []

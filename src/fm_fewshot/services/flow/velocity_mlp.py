@@ -13,6 +13,13 @@ silent. His is what runs; ours is the ablation, and
 test_velocity_mlp asserts a fitted scalar field is not time-invariant rather
 than leaving the risk to argument.
 
+`output_projector` is Stage 3's row-space control (stage3_alignment 3.3): a
+fixed [D, D] projection applied to the velocity, so the block can only move a
+feature in directions the frozen classifier can see. It belongs to the network
+rather than to a training loss because a field projected only while training
+would leave the row space the moment it was integrated at inference, and the
+ablation would measure nothing. None everywhere but that ablation.
+
 `zero_output_init` is Stage 3's near-identity initialization (ADR-030). Zeroing
 the output layer gives v_theta(z, t) = 0 for every z and t, so T Euler steps
 leave a feature where it started and the untrained Stage 3 system is exactly
@@ -50,6 +57,7 @@ class VelocityMLP(nn.Module):
         time_embed_dim: int = 64,
         seed: int = 0,
         zero_output_init: bool = False,
+        output_projector: Tensor | None = None,
     ) -> None:
         super().__init__()
         if time_conditioning not in TIME_CONDITIONINGS:
@@ -83,6 +91,10 @@ class VelocityMLP(nn.Module):
                 out.bias.zero_()
         layers.append(out)
         self.net = nn.Sequential(*layers)
+        # A buffer, not a parameter: it is a fixed property of the frozen
+        # classifier, and being in the state dict is what makes a selected
+        # checkpoint restore the same field it was scored as.
+        self.register_buffer("output_projector", output_projector)
 
     def forward(self, x: Tensor, t: Tensor) -> Tensor:
         time = t.to(x.dtype)
@@ -90,7 +102,10 @@ class VelocityMLP(nn.Module):
             conditioning = time.view(-1, 1)
         else:
             conditioning = sinusoidal_time_embedding(time, self.time_embed_dim)
-        return self.net(torch.cat([x, conditioning], dim=1))
+        velocity = self.net(torch.cat([x, conditioning], dim=1))
+        if self.output_projector is None:
+            return velocity
+        return velocity @ self.output_projector
 
 
 def _seeded_init(linear: nn.Linear, generator: torch.Generator) -> None:
