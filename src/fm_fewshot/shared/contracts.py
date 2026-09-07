@@ -81,6 +81,13 @@ class RunSummary:
     # probe and both Stage 3 heads, which refit it internally (ADR-031). None
     # for every other head, and for runs written before the field existed.
     classifier_digest: str | None = None
+    # Whether that map is the Stage 1 probe at this setting, untouched. False
+    # only for a run of Stage 3's optional extension (FR23), which trains the
+    # classifier alongside the field, so the digest above is a classifier of
+    # the run's own. None for heads that fit no linear map and for runs written
+    # before the field existed; both are read as frozen by subset_check, which
+    # is what every one of those runs was.
+    classifier_frozen: bool | None = None
 
 
 @dataclass(frozen=True)

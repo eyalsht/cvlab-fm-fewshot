@@ -19,6 +19,7 @@ import pytest
 from fm_fewshot.services.evaluation.subset_check import (
     find_classifier_disagreements,
     find_subset_disagreements,
+    find_unmoved_joint_classifiers,
     main,
 )
 
@@ -35,6 +36,7 @@ def write_run(
     subset_seed: int = 0,
     init_seed: int = 0,
     classifier_digest: str | None = None,
+    classifier_frozen: bool | None = None,
 ) -> Path:
     """One run directory holding the fields the guard reads, and nothing else."""
     run_dir = results_dir / run_id
@@ -43,6 +45,7 @@ def write_run(
         "run_id": run_id,
         "subset_idx": subset_idx,
         "classifier_digest": classifier_digest,
+        "classifier_frozen": classifier_frozen,
         "config": {
             "dataset": dataset,
             "encoder": encoder,
@@ -278,3 +281,89 @@ class TestTheFrozenClassifierIsTheStage1Probe:
         write_run(results, "a_ce", subset_idx=[1, 4], head="fm_prelinear_ce",
                   classifier_digest="abc")
         assert find_classifier_disagreements(results) == []
+
+
+class TestARunThatFineTunedItsClassifier:
+    """Stage 3's optional extension (FR23), which the frozen guard must survive.
+
+    A joint run publishes the classifier it actually predicts with, so its
+    digest differs from the Stage 1 probe's on purpose. Two things follow and
+    both are the guard's business. It must not read that difference as the
+    fault it was built to catch, or an ablation directory becomes unusable.
+    And it must not simply ignore the run either: a run that declared itself
+    joint and still carries the frozen digest never moved its classifier, which
+    is the silent failure mode of the whole feature.
+    """
+
+    def test_a_joint_run_does_not_trip_the_frozen_guard(self, tmp_path: Path) -> None:
+        results = tmp_path / "results"
+        write_run(results, "a_probe", subset_idx=[1, 4], head="linear_probe",
+                  classifier_digest="abc", classifier_frozen=True)
+        write_run(results, "b_ce", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="abc", classifier_frozen=True)
+        write_run(results, "c_joint", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="moved", classifier_frozen=False)
+        assert find_classifier_disagreements(results) == []
+        assert find_unmoved_joint_classifiers(results) == []
+        assert main([str(results)]) == 0
+
+    def test_two_joint_runs_may_carry_two_different_classifiers(
+        self, tmp_path: Path
+    ) -> None:
+        """Two configurations of the extension are two fits, not a mismatch."""
+        results = tmp_path / "results"
+        write_run(results, "a_joint", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="one", classifier_frozen=False)
+        write_run(results, "b_joint", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="two", classifier_frozen=False)
+        assert find_classifier_disagreements(results) == []
+        assert main([str(results)]) == 0
+
+    def test_a_joint_run_still_holding_the_frozen_classifier_is_named(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        results = tmp_path / "results"
+        write_run(results, "a_probe", subset_idx=[1, 4], head="linear_probe",
+                  classifier_digest="abc", classifier_frozen=True)
+        write_run(results, "b_joint", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="abc", classifier_frozen=False)
+        assert len(find_unmoved_joint_classifiers(results)) == 1
+        assert main([str(results)]) == 1
+        printed = capsys.readouterr().out
+        assert "did not move" in printed
+        assert "b_joint" in printed
+
+    def test_the_count_of_joint_runs_is_printed(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Excluded from the equality guard, so the exclusion has to be visible."""
+        results = tmp_path / "results"
+        write_run(results, "a_probe", subset_idx=[1, 4], head="linear_probe",
+                  classifier_digest="abc", classifier_frozen=True)
+        write_run(results, "b_joint", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="moved", classifier_frozen=False)
+        assert main([str(results)]) == 0
+        assert "1 run(s) fine-tuned their classifier" in capsys.readouterr().out
+
+    def test_a_run_from_before_the_field_existed_is_treated_as_frozen(
+        self, tmp_path: Path
+    ) -> None:
+        """The 264 runs already in the store carry no `classifier_frozen`, and
+        every one of them was frozen, so the guard binds over them as before."""
+        results = tmp_path / "results"
+        write_run(results, "a_probe", subset_idx=[1, 4], head="linear_probe",
+                  classifier_digest="abc")
+        write_run(results, "b_ce", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="def")
+        assert len(find_classifier_disagreements(results)) == 1
+        assert find_unmoved_joint_classifiers(results) == []
+
+    def test_a_joint_run_alone_at_its_setting_is_not_checked(
+        self, tmp_path: Path
+    ) -> None:
+        """With no frozen run to compare against there is nothing to say."""
+        results = tmp_path / "results"
+        write_run(results, "a_joint", subset_idx=[1, 4], head="fm_prelinear_ce",
+                  classifier_digest="abc", classifier_frozen=False)
+        assert find_unmoved_joint_classifiers(results) == []
+        assert main([str(results)]) == 0

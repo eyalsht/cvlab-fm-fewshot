@@ -107,6 +107,10 @@ def run_experiment(
         # is what lets subset_check verify that a Stage 3 run transported into
         # the same classifier its Stage 1 row reports (ADR-031).
         classifier_digest=getattr(head, "classifier_digest", None),
+        # And whether that classifier is still the Stage 1 map. A run of the
+        # optional extension trained it, so its digest is its own and the
+        # cross-run equality guard must know not to demand it match (FR23).
+        classifier_frozen=getattr(head, "classifier_frozen", None),
     )
     # Only the head sees its own intermediate training steps, so a periodic
     # val_top1 in loss_curve.csv can only come from the head choosing to record

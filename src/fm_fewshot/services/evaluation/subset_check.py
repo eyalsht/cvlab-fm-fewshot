@@ -23,6 +23,14 @@ Runs written before that digest existed carry none. They are skipped rather
 than failed, and counted in the output, so it is visible which cells still
 have to be rerun before the guard binds over them.
 
+Stage 3's optional extension (FR23) trains the classifier, so its runs record
+a digest of their own and declare `classifier_frozen = False`. They are held
+to the opposite rule: excluded from the equality above, because differing is
+the point, and failed if their digest **equals** the frozen one at the same
+setting, because a run that declared itself joint and never moved its
+classifier is a joint run in name only. Runs written before that field existed
+carry None and are read as frozen, which every one of them was.
+
 A missing or empty results tree is not a failure. `results/` is gitignored and
 a fresh checkout has none, and the gate has to be runnable there.
 """
@@ -47,11 +55,35 @@ class RunRows:
     subset_idx: tuple[int, ...]
     init_seed: int = 0
     classifier_digest: str | None = None
+    # None means the run predates the field, which is read as frozen.
+    classifier_frozen: bool | None = None
+
+    @property
+    def joint(self) -> bool:
+        """True only for a run that fine-tuned its classifier (FR23)."""
+        return self.classifier_frozen is False
 
 
 @dataclass(frozen=True)
 class ClassifierDisagreement:
     """One setting whose runs did not all fit the same frozen classifier."""
+
+    dataset: str
+    encoder: str
+    k: object
+    subset_seed: int
+    init_seed: int
+    runs: tuple[RunRows, ...]
+
+
+@dataclass(frozen=True)
+class UnmovedJointClassifier:
+    """One setting where a joint run still carries the frozen classifier.
+
+    The mirror of `ClassifierDisagreement`: there, runs that had to agree did
+    not; here, a run that had to differ does not. Either way the digests in
+    the store do not mean what the run's own configuration says they do.
+    """
 
     dataset: str
     encoder: str
@@ -102,6 +134,7 @@ def read_runs(results_dir: Path) -> dict[SettingKey, list[RunRows]]:
                 subset_idx=tuple(int(i) for i in payload["subset_idx"]),
                 init_seed=int(cfg.get("init_seed", 0)),
                 classifier_digest=payload.get("classifier_digest"),
+                classifier_frozen=payload.get("classifier_frozen"),
             )
         )
     return grouped
@@ -133,26 +166,43 @@ def find_subset_disagreements(results_dir: Path) -> list[SubsetDisagreement]:
 CLASSIFIER_HEADS = ("linear_probe", "fm_prelinear_ce", "fm_prelinear_guided")
 
 
-def find_classifier_disagreements(results_dir: Path) -> list[ClassifierDisagreement]:
-    """Every setting whose runs did not all fit the same frozen classifier.
+def _by_classifier_setting(results_dir: Path) -> dict[ClassifierKey, list[RunRows]]:
+    """Runs carrying a digest, grouped one finer than the subset guard groups.
 
-    Stage 3 refits the Stage 1 probe inside its own head at the same
-    init_seed, so at one (dataset, encoder, k, subset_seed, init_seed) the
-    probe run and both Stage 3 runs must carry one digest between them. A run
-    with no digest is skipped: the store holds runs written before the field
-    existed, and they cannot bind the check.
+    The classifier depends on init_seed and the full setting varies exactly
+    that, so (dataset, encoder, k, subset_seed) would compare three
+    deliberately different classifiers. A run with no digest is dropped: the
+    store holds runs written before the field existed and they bind nothing.
     """
-    disagreements: list[ClassifierDisagreement] = []
-    by_classifier: dict[ClassifierKey, list[RunRows]] = {}
+    grouped: dict[ClassifierKey, list[RunRows]] = {}
     for (dataset, encoder, k, subset_seed), runs in read_runs(results_dir).items():
         for run in runs:
             if run.classifier_digest is None:
                 continue
             key: ClassifierKey = (dataset, encoder, k, subset_seed, run.init_seed)
-            by_classifier.setdefault(key, []).append(run)
+            grouped.setdefault(key, []).append(run)
+    return grouped
 
-    for key in sorted(by_classifier, key=lambda k: (k[0], k[1], _k_label(k[2]), k[3], k[4])):
-        runs = sorted(by_classifier[key], key=lambda run: run.run_id)
+
+def _sorted_settings(grouped: dict[ClassifierKey, list[RunRows]]) -> list[ClassifierKey]:
+    return sorted(grouped, key=lambda k: (k[0], k[1], _k_label(k[2]), k[3], k[4]))
+
+
+def find_classifier_disagreements(results_dir: Path) -> list[ClassifierDisagreement]:
+    """Every setting whose frozen runs did not all fit the same classifier.
+
+    Stage 3 refits the Stage 1 probe inside its own head at the same
+    init_seed, so at one setting the probe run and both Stage 3 runs must
+    carry one digest between them. Runs of the optional extension are left out:
+    their classifier moved on purpose, and `find_unmoved_joint_classifiers` is
+    the rule they are held to instead.
+    """
+    disagreements: list[ClassifierDisagreement] = []
+    grouped = _by_classifier_setting(results_dir)
+    for key in _sorted_settings(grouped):
+        runs = sorted(
+            (run for run in grouped[key] if not run.joint), key=lambda run: run.run_id
+        )
         if len({run.classifier_digest for run in runs}) > 1:
             dataset, encoder, k, subset_seed, init_seed = key
             disagreements.append(
@@ -168,6 +218,45 @@ def find_classifier_disagreements(results_dir: Path) -> list[ClassifierDisagreem
     return disagreements
 
 
+def find_unmoved_joint_classifiers(results_dir: Path) -> list[UnmovedJointClassifier]:
+    """Every setting where a joint run still carries the frozen classifier.
+
+    A run of the optional extension trains W and b, so its digest must differ
+    from the frozen digest at its own setting. Equal means the classifier
+    never moved, which is the silent failure mode of the whole extension: the
+    run would be reported as a joint row while being the frozen one.
+
+    With no frozen run at that setting there is nothing to compare against and
+    nothing is claimed.
+    """
+    unmoved: list[UnmovedJointClassifier] = []
+    grouped = _by_classifier_setting(results_dir)
+    for key in _sorted_settings(grouped):
+        runs = sorted(grouped[key], key=lambda run: run.run_id)
+        frozen = {run.classifier_digest for run in runs if not run.joint}
+        offenders = [run for run in runs if run.joint and run.classifier_digest in frozen]
+        if offenders:
+            dataset, encoder, k, subset_seed, init_seed = key
+            unmoved.append(
+                UnmovedJointClassifier(
+                    dataset=dataset,
+                    encoder=encoder,
+                    k=k,
+                    subset_seed=subset_seed,
+                    init_seed=init_seed,
+                    runs=tuple(offenders),
+                )
+            )
+    return unmoved
+
+
+def count_joint_runs(results_dir: Path) -> int:
+    """Runs that fine-tuned their classifier, so stand outside the equality guard."""
+    return sum(
+        1 for runs in read_runs(results_dir).values() for run in runs if run.joint
+    )
+
+
 def count_missing_digests(results_dir: Path) -> int:
     """Runs by a classifier-fitting head that carry no digest, so bind nothing."""
     return sum(
@@ -178,7 +267,9 @@ def count_missing_digests(results_dir: Path) -> int:
     )
 
 
-def format_classifier_disagreement(disagreement: ClassifierDisagreement) -> str:
+def format_classifier_disagreement(
+    disagreement: ClassifierDisagreement | UnmovedJointClassifier,
+) -> str:
     header = (
         f"{disagreement.dataset} / {disagreement.encoder} / "
         f"k={_k_label(disagreement.k)} / subset_seed={disagreement.subset_seed} / "
@@ -248,8 +339,27 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
+    unmoved = find_unmoved_joint_classifiers(args.results_dir)
+    if unmoved:
+        print(f"a joint classifier did not move in {len(unmoved)} setting(s):")
+        for disagreement in unmoved:
+            print(format_classifier_disagreement(disagreement))
+        print(
+            "the runs above declared the optional extension (FR23) and still "
+            "carry the frozen classifier's digest, so their classifier did not "
+            "move and they are the frozen row under another name"
+        )
+        return 1
+
     checked = sum(len(runs) for runs in read_runs(args.results_dir).values())
     print(f"{checked} run(s) checked, every head at each setting on identical rows")
+    joint = count_joint_runs(args.results_dir)
+    if joint:
+        print(
+            f"{joint} run(s) fine-tuned their classifier (FR23) and are excluded "
+            "from the frozen-classifier guard; each was checked to differ from "
+            "the frozen classifier at its own setting"
+        )
     missing = count_missing_digests(args.results_dir)
     if missing:
         print(
