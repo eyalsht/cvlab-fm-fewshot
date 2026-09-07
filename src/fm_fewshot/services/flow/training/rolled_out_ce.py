@@ -294,6 +294,9 @@ def train_rolled_out_ce_field(
             lambda_disp=lambda_disp,
             lambda_vel=lambda_vel,
             freeze_classifier=joint is None,
+            mu=mu,
+            coupling=coupling,
+            generator=generator,
         )
 
     extra_param_groups = (

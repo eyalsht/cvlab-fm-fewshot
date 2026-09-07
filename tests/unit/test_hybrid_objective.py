@@ -191,3 +191,34 @@ class TestTheHead:
             eval_every=0, probe_params={"max_epochs": 5},
         )
         assert make_head(cfg, 3).ce_config.mu == 0.0
+
+
+class TestTheTermSurvivesThePlumbing:
+    """Regression: mu reached the loss but not the loop, so real fits ignored it.
+
+    The tests above call `rolled_out_ce_loss` directly and passed while the
+    trainer's own batch loss dropped `mu` on the floor, which is exactly the
+    gap a head-level assertion closes. Two runs of the grid were wasted on it.
+    """
+
+    @staticmethod
+    def _fit(mu: float):
+        cfg = make_config(
+            "fm_prelinear_ce", sample_steps=4, n_train_steps=20, hidden_dims=[16, 16],
+            batch_size=8, lr=1e-2, eval_every=0, probe_params={"max_epochs": 10},
+            mu=mu, target_step="normalized", rho=0.15,
+        )
+        head = make_head(cfg, 3)
+        train_x, train_y = problem()
+        head.fit(train_x, train_y, train_x, train_y)
+        return [p.detach().clone() for p in head.field.parameters()]
+
+    def test_a_nonzero_mu_changes_the_fitted_field(self) -> None:
+        assert any(
+            not torch.equal(a, b)
+            for a, b in zip(self._fit(0.0), self._fit(1.0), strict=True)
+        )
+
+    def test_mu_zero_through_the_head_is_the_plain_strategy_1_fit(self) -> None:
+        for a, b in zip(self._fit(0.0), self._fit(0.0), strict=True):
+            assert torch.equal(a, b)
