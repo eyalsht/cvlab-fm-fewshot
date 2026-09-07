@@ -174,3 +174,106 @@ variants:
       eta: 1.0
       target_steps: 3
       target_every: 1
+  # His write-up names four things to experiment with for Strategy 2. The two
+  # below were the ones still unswept: the feature-space step size and the
+  # number of target-improvement steps. Both are swept on the uncapped
+  # configuration, because under `normalized` the gradient is rescaled to
+  # ||z|| before the eta multiply and then clipped at rho ||z||, so with one
+  # target step any eta at or above rho gives the identical capped target and
+  # eta is inert there. guided-norm-rho0.25-eta2 is the pair that checks that
+  # claim against a run rather than leaving it an argument.
+  # The write-up's other two open knobs, "the feature-space step size" and
+  # "the number of target-improvement steps" (eta and target_steps), still
+  # unswept above. Both must run under target_step: raw, not normalized.
+  # classifier_guided.py rescales the gradient to || z || before the eta
+  # multiply (guided_target, the `gradient / (... ) * anchor` line) and then,
+  # only under `normalized`, clips the whole step to `rho || z ||` in `_cap`.
+  # With target_steps: 1 and the near-identity start, the pre-cap step has
+  # norm ~= eta || z ||, so once eta >= rho the cap always fires and every
+  # such eta lands on the identical clipped target: eta is inert there. raw
+  # never clips, so it is where eta's own size is what is being measured.
+  # Same base as the graded row throughout: raw, eta 1.0, target_steps 1,
+  # target_every 1; one knob moves per variant.
+  - label: guided-raw-eta0.1
+    head: fm_prelinear_guided
+    head_params: &stage3_guided
+      sample_steps: 12
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: raw
+      eta: 0.1
+      target_steps: 1
+      target_every: 1
+  - label: guided-raw-eta0.25
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 0.25
+  - label: guided-raw-eta0.5
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 0.5
+  - label: guided-raw-eta2
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 2.0
+  - label: guided-raw-eta4
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 4.0
+  # target_steps at the graded eta, uncapped, so each added step is a full
+  # unclipped move rather than one that collapses into the same cap
+  # (guided-raw-m3 above already covers target_steps: 3 at this base).
+  # target_steps at the graded eta, uncapped, so each added step is a full
+  # unclipped move rather than one that collapses into the same cap
+  # (guided-raw-m3 above already covers target_steps: 3 at this base).
+  - label: guided-raw-m2
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 1.0
+      target_steps: 2
+  - label: guided-raw-m5
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 1.0
+      target_steps: 5
+  - label: guided-raw-m10
+    head: fm_prelinear_guided
+    head_params:
+      <<: *stage3_guided
+      eta: 1.0
+      target_steps: 10
+  # Direct check of the cap-inertness reading above: same rho as
+  # guided-norm-rho0.25 but eta doubled. If the reading is right this
+  # reproduces guided-norm-rho0.25 to within seed noise despite the
+  # different eta, because both hit the same cap.
+  # Direct check of the cap-inertness reading above: same rho as
+  # guided-norm-rho0.25 but eta doubled. If the reading is right this
+  # reproduces guided-norm-rho0.25 to within seed noise despite the
+  # different eta, because both hit the same cap.
+  - label: guided-norm-rho0.25-eta2
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 12
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: normalized
+      eta: 2.0
+      target_steps: 1
+      target_every: 1
+      rho: 0.25
