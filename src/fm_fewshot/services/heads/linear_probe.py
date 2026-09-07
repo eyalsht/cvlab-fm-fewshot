@@ -56,6 +56,7 @@ class LinearProbeHead(FewShotHead):
         self._bias: Tensor | None = None
         self._epochs: list[EpochRecord] = []
         self._best_epoch: int | None = None
+        self._frozen = True
 
     @classmethod
     def from_context(
@@ -107,6 +108,43 @@ class LinearProbeHead(FewShotHead):
         for tensor in (self.weight, self.bias):
             digest.update(tensor.detach().cpu().contiguous().numpy().tobytes())
         return digest.hexdigest()
+
+    @property
+    def classifier_frozen(self) -> bool:
+        """Whether (W, b) is still the map `fit` selected, untouched since.
+
+        True for every Stage 1 row and every graded Stage 3 row. False once
+        `unfreeze` has been called, which is Stage 3's optional extension
+        (FR23) and nothing else. The flag is about provenance, not about the
+        current `requires_grad`: `refreeze` does not clear it, so a digest
+        published by a probe that was ever reopened can never be read as the
+        Stage 1 probe's.
+        """
+        return self._frozen
+
+    def unfreeze(self) -> tuple[Tensor, Tensor]:
+        """Reopen the fitted map for further training; returns W and b in place.
+
+        The tensors are the probe's own, not copies, so an optimizer that
+        updates them updates what `predict` and `classifier_digest` read. That
+        is what lets checkpoint selection score the system as it currently
+        stands rather than a stale classifier.
+        """
+        weight, bias = self.weight, self.bias  # raises if the probe is unfitted
+        self._frozen = False
+        weight.requires_grad_(True)
+        bias.requires_grad_(True)
+        return weight, bias
+
+    def refreeze(self) -> None:
+        """Detach W and b again once joint training has finished.
+
+        The selected map is a fact from here on, so it carries no graph and no
+        gradient. `classifier_frozen` stays False: this run's classifier moved.
+        """
+        if self._weight is not None and self._bias is not None:
+            self._weight = self._weight.detach()
+            self._bias = self._bias.detach()
 
     @property
     def best_epoch(self) -> int:

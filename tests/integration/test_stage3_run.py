@@ -150,3 +150,61 @@ class TestTheRunStoreCarriesTheClassifier:
             tuple(summary_of(store, run.name)["subset_idx"]) for run in store.iterdir()
         }
         assert len(rows) == 1
+
+    def test_every_run_declares_its_classifier_frozen(self, store: Path) -> None:
+        frozen = {summary_of(store, run.name)["classifier_frozen"] for run in store.iterdir()}
+        assert frozen == {True}
+
+
+class TestTheOptionalExtensionIsVisibleInTheStore:
+    """FR23. A joint run must be readable as one from its summary alone.
+
+    The digest is the classifier the run predicts with, not the Stage 1
+    probe's, and `classifier_frozen` is what tells the gate to hold it to a
+    different rule than the frozen rows.
+    """
+
+    @pytest.fixture
+    def store(self, built_caches: Path, tmp_path: Path) -> Path:
+        results = tmp_path / "results"
+        sdk.run_experiment(config("linear_probe"), data_root=built_caches, results_dir=results)
+        sdk.run_experiment(
+            config("fm_prelinear_ce", head_params=STAGE3_PARAMS),
+            data_root=built_caches,
+            results_dir=results,
+        )
+        sdk.run_experiment(
+            config(
+                "fm_prelinear_ce",
+                run_name="stage3-joint",
+                head_params=dict(STAGE3_PARAMS, joint_classifier=True, classifier_lr=1e-3),
+            ),
+            data_root=built_caches,
+            results_dir=results,
+        )
+        return results
+
+    def _joint(self, store: Path) -> dict:
+        return next(
+            summary_of(store, run.name)
+            for run in store.iterdir()
+            if summary_of(store, run.name)["classifier_frozen"] is False
+        )
+
+    def test_the_joint_run_records_a_classifier_of_its_own(self, store: Path) -> None:
+        joint = self._joint(store)
+        frozen = {
+            summary_of(store, run.name)["classifier_digest"]
+            for run in store.iterdir()
+            if summary_of(store, run.name)["classifier_frozen"]
+        }
+        assert len(frozen) == 1
+        assert joint["classifier_digest"] not in frozen
+
+    def test_the_gate_passes_with_a_joint_run_in_the_store(self, store: Path) -> None:
+        assert find_classifier_disagreements(store) == []
+        assert check_subsets([str(store)]) == 0
+
+    def test_the_joint_run_fitted_the_same_rows(self, store: Path) -> None:
+        rows = {tuple(summary_of(store, run.name)["subset_idx"]) for run in store.iterdir()}
+        assert len(rows) == 1

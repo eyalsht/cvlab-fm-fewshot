@@ -132,11 +132,13 @@ class FmPreLinearHead(FewShotHead):
         probe: LinearProbeHead,
         selector: ValidationSelector,
     ) -> tuple[VelocityMLP, list[float]]:
-        """Train v_theta ahead of the frozen probe; return it and its loss curve.
+        """Train v_theta ahead of the probe; return it and its loss curve.
 
-        The probe is handed over fitted and is read, never written: a strategy
-        that updated W or b would be answering the optional extension's
-        question instead of the graded one.
+        The probe is handed over fitted and is read, never written, unless the
+        strategy was explicitly configured for the optional extension (FR23).
+        A strategy that updated W or b by default would be answering that
+        question instead of the graded one, so the extension is opt-in and the
+        probe records that it was reopened.
         """
 
     @property
@@ -152,13 +154,30 @@ class FmPreLinearHead(FewShotHead):
 
     @property
     def classifier_digest(self) -> str:
-        """The frozen probe's fingerprint, recorded so the run store can be checked.
+        """The probe's fingerprint, recorded so the run store can be checked.
 
         Duck-typed, like `val_top1_history`: the loop reads it when a head has
         one and records it in the summary, and `subset_check` compares it
         against the Stage 1 probe's at the same setting.
+
+        It is the classifier this head actually predicts with, which for a run
+        of the optional extension is the fine-tuned map and not the Stage 1
+        probe's. A joint run that published the frozen digest would make the
+        guard pass over precisely the case it exists to catch, so the digest
+        moves with the classifier and `classifier_frozen` is what tells the
+        guard to hold that run to a different rule.
         """
         return self._probe.classifier_digest
+
+    @property
+    def classifier_frozen(self) -> bool:
+        """Whether the probe this head predicts with is the Stage 1 map, untouched.
+
+        True for every graded Stage 3 row. False for a run of the optional
+        extension (FR23), whose classifier was trained alongside the field.
+        Duck-typed the same way the digest is.
+        """
+        return self._probe.classifier_frozen
 
     @property
     def zero_output_init(self) -> bool:

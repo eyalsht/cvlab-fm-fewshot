@@ -504,6 +504,14 @@ class TestStage3IdenticalLoopArguments:
         # the search-space difference this class exists to rule out.
         assert ce_kwargs.pop("output_projector", None) is None
         assert guided_kwargs.pop("output_projector", None) is None
+        # Neither is the optional extension: no second parameter group, so no
+        # classifier in the optimizer, and no schedule to unfreeze one (FR23).
+        # Strategy 1 names both keywords because it is the strategy that can
+        # carry them; in the graded configuration both are empty.
+        assert ce_kwargs.pop("extra_param_groups", None) is None
+        assert ce_kwargs.pop("on_before_step", None) is None
+        assert guided_kwargs.pop("extra_param_groups", None) is None
+        assert guided_kwargs.pop("on_before_step", None) is None
         assert ce_kwargs == guided_kwargs
 
     def test_both_strategies_train_the_field_from_identity(

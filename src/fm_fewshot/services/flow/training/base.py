@@ -73,6 +73,20 @@ def require_paired_endpoints(x0: Tensor, x1: Tensor) -> None:
         )
 
 
+class Checkpointable(Protocol):
+    """Anything the selector saves and restores next to the field's weights.
+
+    Stage 3's optional extension moves the classifier as well as the field, and
+    a checkpoint that kept the field of step s beside the classifier of the
+    last step would restore a system that was never scored. Typed structurally
+    so this module still knows nothing about classifiers.
+    """
+
+    def snapshot(self) -> object: ...
+
+    def restore(self, state: object) -> None: ...
+
+
 class Classifier(Protocol):
     """What the selector needs of a decision rule: logits from features.
 
@@ -126,6 +140,18 @@ class ValidationSelector:
         self._best_step: int | None = None
         self._best_accuracy = -1.0
         self._best_state: dict[str, Tensor] | None = None
+        self._extra: Checkpointable | None = None
+        self._best_extra: object = None
+
+    def track(self, extra: Checkpointable) -> None:
+        """Also checkpoint this alongside the field.
+
+        Untracked by default, which is every run whose classifier is frozen.
+        Stage 3's optional extension tracks the classifier it is training, so
+        the step the selector keeps is one system rather than two halves from
+        two steps.
+        """
+        self._extra = extra
 
     @property
     def enabled(self) -> bool:
@@ -154,11 +180,15 @@ class ValidationSelector:
             self._best_state = {
                 name: tensor.detach().clone() for name, tensor in field.state_dict().items()
             }
+            if self._extra is not None:
+                self._best_extra = self._extra.snapshot()
 
     def restore(self, field: VelocityMLP) -> None:
         """Put the selected weights back into the field. A no-op if none were kept."""
         if self._best_state is not None:
             field.load_state_dict(self._best_state)
+            if self._extra is not None:
+                self._extra.restore(self._best_extra)
 
     def _accuracy(self, field: VelocityMLP) -> float:
         was_training = field.training
@@ -187,6 +217,8 @@ def train_field(
     init_seed: int = 0,
     zero_output_init: bool = False,
     output_projector: Tensor | None = None,
+    extra_param_groups: list[dict] | None = None,
+    on_before_step: Callable[[int], None] | None = None,
     on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta on the paired coupling (x0[i] -> x1[i]); return it and its loss curve.
@@ -220,6 +252,19 @@ def train_field(
     ablation's fixed projection. Both reach the network and nothing else: the
     loop, the optimizer and the batch stream do not read either.
 
+    `extra_param_groups` are parameter groups the optimizer updates alongside
+    the field, each with its own learning rate. Empty for everything but
+    Stage 3's optional extension, which puts the classifier's W and b in a
+    second group so the two can be trained at different rates. With none, the
+    Adam built here is the one-argument construction it has always been, so a
+    frozen run is bit-identical to the run before this seam existed.
+
+    `on_before_step` runs at the top of each step with the 1-based step number,
+    before anything is drawn or computed. It exists for schedules the loop
+    cannot know about, such as unfreezing a classifier at step N. Like
+    `on_step`, it consumes no randomness, so an observed fit stays
+    bit-identical to an unobserved one.
+
     `on_step` is a diagnostic and defaults to off. When given, it is handed the
     1-based step number and the global gradient norm, read after `backward` and
     before `optimizer.step()`, which is the only point at which the gradient
@@ -250,10 +295,18 @@ def train_field(
     # One stream for the weights, one for the batches, both from init_seed, so
     # the seed alone reproduces the fit (ADR-012).
     generator = torch.Generator().manual_seed(init_seed)
-    optimizer = torch.optim.Adam(field.parameters(), lr=lr)
+    if extra_param_groups:
+        optimizer = torch.optim.Adam(
+            [{"params": list(field.parameters())}, *extra_param_groups], lr=lr
+        )
+    else:
+        optimizer = torch.optim.Adam(field.parameters(), lr=lr)
     history: list[float] = []
 
     for step in range(n_train_steps):
+        if on_before_step is not None:
+            # 1-based, so a schedule counts the steps loss_curve.csv counts.
+            on_before_step(step + 1)
         rows = torch.randint(0, x0.shape[0], (batch_size,), generator=generator)
         batch_x0 = x0[rows]
         if couple is None:
