@@ -13,8 +13,10 @@
 # (fgvc_aircraft, dinov2_vits14) at K=10, because these answer questions about
 # the graded rows rather than extending the grid.
 #
-# T is 4 here. Once 10.8 picks the Main Comparison's T on validation accuracy,
-# these move to that T so an ablation is read against the row it questions.
+# T is 12: the value 10.8's pre-registered rule chose for the Main Comparison,
+# so each ablation is read against the graded row it questions rather than
+# against a different depth. The rule chose it by 0.0026 on validation, a
+# margin smaller than any cell's seed spread, so nothing here rests on T.
 
 datasets:
   - dtd
@@ -34,7 +36,7 @@ variants:
   - label: ce-disp0.01
     head: fm_prelinear_ce
     head_params: &stage3_training
-      sample_steps: 4
+      sample_steps: 12
       n_train_steps: 2000
       batch_size: 64
       lr: 1.0e-3
@@ -75,7 +77,7 @@ variants:
   - label: guided-norm-rho0.25
     head: fm_prelinear_guided
     head_params:
-      sample_steps: 4
+      sample_steps: 12
       n_train_steps: 2000
       batch_size: 64
       lr: 1.0e-3
@@ -91,7 +93,7 @@ variants:
   - label: guided-norm-rho0.5
     head: fm_prelinear_guided
     head_params:
-      sample_steps: 4
+      sample_steps: 12
       n_train_steps: 2000
       batch_size: 64
       lr: 1.0e-3
@@ -109,7 +111,7 @@ variants:
   - label: guided-raw-every50
     head: fm_prelinear_guided
     head_params:
-      sample_steps: 4
+      sample_steps: 12
       n_train_steps: 2000
       batch_size: 64
       lr: 1.0e-3
@@ -124,7 +126,7 @@ variants:
   - label: guided-raw-m3
     head: fm_prelinear_guided
     head_params:
-      sample_steps: 4
+      sample_steps: 12
       n_train_steps: 2000
       batch_size: 64
       lr: 1.0e-3
