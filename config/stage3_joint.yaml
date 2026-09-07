@@ -1,0 +1,140 @@
+# Stage 3's optional extension (FR23), expanded by services/evaluation/sweep.py.
+# Run into ablations/, never results/:
+#
+#   uv run python -m fm_fewshot sweep --config config/stage3_joint.yaml \
+#       --results-dir ablations
+#
+# "After completing the frozen-classifier experiments, you may also unfreeze
+# the pretrained linear classifier and jointly optimize the FM transformation
+# and classifier. Compare this with the frozen-classifier setting and with the
+# original Stage 1 linear probe. You may experiment with choices such as
+# different learning rates for the FM and classifier, delayed unfreezing, or
+# additional regularization."
+#
+# It is optional and gated behind the graded grid by his own wording, so every
+# row here is an ablations/ row under ADR-016 and none of it reaches TABLE.md.
+#
+# Strategy 1 only. Strategy 2 builds its target from the frozen classifier's
+# gradient and treats it as fixed while the field is fitted toward it; a
+# classifier that also moves changes what the target means between recomputes,
+# on top of the compounding section 4 of phase10 already measured. That is a
+# different question and is left open rather than half-answered here.
+#
+# The grid: the K=10 cells of all three (dataset, encoder) pairs, both T, three
+# seeds, six variants. 108 runs.
+#
+# Both T, not the T the Main Comparison chose. The rule that chose T=12 did so
+# by 0.0026 on validation, smaller than any cell's seed spread, so T is not
+# settled by anything and the extension changes what the depth has to do: the
+# classifier can now meet the block halfway.
+#
+# The variants vary one thing each against the first. `joint-lr1e-3` is the
+# plain reading of "jointly optimize", both at the field's rate. Two lower
+# classifier rates are his "different learning rates". Two delays are his
+# "delayed unfreezing", both at the base rate so the delay is the only change.
+# `joint-disp0.01` is his "additional regularization", at the displacement
+# weight that recovered Strategy 1's whole loss on DTD in stage3_ablations.
+#
+# The classifier rates and the delays are fixed here rather than tuned per
+# cell, per the write-up's fairness requirement, and the comparison is ranked
+# on validation top-1 only.
+
+datasets:
+  - dtd
+  - fgvc_aircraft
+
+encoders:
+  resnet18:
+    - dtd
+    - fgvc_aircraft
+  dinov2_vits14:
+    - fgvc_aircraft
+
+ks:
+  - 10
+
+variants:
+  # The plain reading: both the field and the classifier from step 1, at the
+  # rate the field uses. Everything below varies one thing against this.
+  - label: T4-joint-lr1e-3
+    head: fm_prelinear_ce
+    head_params: &joint_training
+      sample_steps: 4
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      lambda_disp: 0.0
+      lambda_vel: 0.0
+      project_velocity: false
+      joint_classifier: true
+      classifier_lr: 1.0e-3
+      unfreeze_at: 0
+  - label: T4-joint-lr1e-4
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      classifier_lr: 1.0e-4
+  - label: T4-joint-lr1e-5
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      classifier_lr: 1.0e-5
+  # Delayed unfreezing: the classifier is untouched for the first N of 2000
+  # steps, so the block gets a head start on the map it was initialized behind.
+  - label: T4-joint-delay500
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      unfreeze_at: 500
+  - label: T4-joint-delay1000
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      unfreeze_at: 1000
+  # Additional regularization, against a Strategy 1 that memorizes: the
+  # displacement penalty at the weight stage3_ablations found (phase10 6).
+  - label: T4-joint-disp0.01
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      lambda_disp: 0.01
+
+  - label: T12-joint-lr1e-3
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      sample_steps: 12
+  - label: T12-joint-lr1e-4
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      sample_steps: 12
+      classifier_lr: 1.0e-4
+  - label: T12-joint-lr1e-5
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      sample_steps: 12
+      classifier_lr: 1.0e-5
+  - label: T12-joint-delay500
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      sample_steps: 12
+      unfreeze_at: 500
+  - label: T12-joint-delay1000
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      sample_steps: 12
+      unfreeze_at: 1000
+  - label: T12-joint-disp0.01
+    head: fm_prelinear_ce
+    head_params:
+      <<: *joint_training
+      sample_steps: 12
+      lambda_disp: 0.01
