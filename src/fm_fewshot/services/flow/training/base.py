@@ -217,6 +217,7 @@ def train_field(
     init_seed: int = 0,
     zero_output_init: bool = False,
     output_projector: Tensor | None = None,
+    init_state: dict[str, Tensor] | None = None,
     extra_param_groups: list[dict] | None = None,
     on_before_step: Callable[[int], None] | None = None,
     on_step: StepObserver | None = None,
@@ -289,6 +290,11 @@ def train_field(
         zero_output_init=zero_output_init,
         output_projector=output_projector,
     )
+    if init_state is not None:
+        # A field carried over from another fit rather than seeded here. The
+        # seeded construction still runs, so the batch stream is unchanged and
+        # only the weights differ.
+        field.load_state_dict(init_state)
     if n_train_steps == 0:
         return field, []
 

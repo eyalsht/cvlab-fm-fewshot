@@ -22,6 +22,7 @@ the extension existed produces the same fit it always did.
 from torch import Tensor
 
 from fm_fewshot.services.flow.training.base import ValidationSelector
+from fm_fewshot.services.flow.training.classifier_guided import GuidedTargetConfig
 from fm_fewshot.services.flow.training.rolled_out_ce import (
     JointClassifier,
     RolledOutCeConfig,
@@ -59,6 +60,14 @@ class FmPreLinearCeHead(FmPreLinearHead):
                     else float(params["classifier_lr"])
                 ),
                 unfreeze_at=int(params.get("unfreeze_at", 0)),
+                mu=float(params.get("mu", 0.0)),
+                coupling=GuidedTargetConfig(
+                    target_step=str(params.get("target_step", "raw")),
+                    eta=float(params.get("eta", 1.0)),
+                    target_steps=int(params.get("target_steps", 1)),
+                    target_every=int(params.get("target_every", 1)),
+                    rho=float(params.get("rho", 0.5)),
+                ),
             ),
             **cls.shared_params(cfg, n_classes),
         )
@@ -101,10 +110,13 @@ class FmPreLinearCeHead(FmPreLinearHead):
                 lambda_disp=self._ce_config.lambda_disp,
                 lambda_vel=self._ce_config.lambda_vel,
                 project_velocity=self._ce_config.project_velocity,
+                mu=self._ce_config.mu,
+                coupling=self._ce_config.coupling,
                 joint=joint,
                 classifier_lr=self._ce_config.classifier_lr,
                 init_seed=self._init_seed,
                 zero_output_init=self._zero_output_init,
+                init_state=self._init_state,
             )
         finally:
             # Training is over, however it ended; the selected map is a fact

@@ -80,6 +80,8 @@ class FmPreLinearHead(FewShotHead):
         eval_every: int = DEFAULT_EVAL_EVERY,
         zero_output_init: bool = True,
         probe_params: dict[str, object] | None = None,
+        init_from: str = "",
+        stage2_train_steps: int | None = None,
         init_seed: int = 0,
     ) -> None:
         if sample_steps < 1:
@@ -95,6 +97,9 @@ class FmPreLinearHead(FewShotHead):
         self._time_conditioning = time_conditioning
         self._eval_every = eval_every
         self._zero_output_init = zero_output_init
+        self._init_from = init_from
+        self._stage2_train_steps = stage2_train_steps
+        self._init_state: dict[str, Tensor] | None = None
         self._init_seed = init_seed
         # The probe's hyperparameters are Stage 1's defaults unless a config
         # overrides them, and they live in their own namespace because `lr` and
@@ -120,6 +125,11 @@ class FmPreLinearHead(FewShotHead):
             "time_conditioning": str(params.get("time_conditioning", "scalar")),
             "eval_every": int(params.get("eval_every", DEFAULT_EVAL_EVERY)),
             "zero_output_init": bool(params.get("zero_output_init", True)),
+            "init_from": str(params.get("init_from", "")),
+            "stage2_train_steps": (
+                None if params.get("stage2_train_steps") is None
+                else int(params["stage2_train_steps"])
+            ),
             "probe_params": params.get("probe_params"),
             "init_seed": cfg.init_seed,
         }
@@ -184,6 +194,21 @@ class FmPreLinearHead(FewShotHead):
         return self._zero_output_init
 
     @property
+    def init_from(self) -> str:
+        """The Stage 2 head whose trained field this one starts from, or empty."""
+        return self._init_from
+
+    @property
+    def starts_at_identity(self) -> bool:
+        """Whether the untrained system is the probe exactly (ADR-030).
+
+        False for a run that carried a Stage 2 field over, which is the whole
+        point of that option and the guarantee it gives up. Recorded so a
+        finished run can be read as one without refitting it.
+        """
+        return self._zero_output_init and not self._init_from
+
+    @property
     def loss_history(self) -> list[float]:
         """Per-step training loss, written to loss_curve.csv by the loop (ADR-024)."""
         return list(self._loss_history)
@@ -207,6 +232,8 @@ class FmPreLinearHead(FewShotHead):
         return self._selector.best_step if self._selector is not None else None
 
     def fit(self, train_x: Tensor, train_y: Tensor, val_x: Tensor, val_y: Tensor) -> None:
+        if self._init_from:
+            self._init_state = self._stage2_field(train_x, train_y, val_x, val_y)
         self._probe.fit(train_x, train_y, val_x, val_y)
         # The classifier the selector scores with is the head's own frozen
         # probe, so the number selection maximizes is the number the run
@@ -243,6 +270,49 @@ class FmPreLinearHead(FewShotHead):
                 return integrate(field, x, sample_steps=self._sample_steps)
         finally:
             field.train(was_training)
+
+
+    def _stage2_field(
+        self, train_x: Tensor, train_y: Tensor, val_x: Tensor, val_y: Tensor
+    ) -> dict[str, Tensor]:
+        """Refit a Stage 2 head here and take its field (extra, never graded).
+
+        Refitted rather than loaded, for ADR-025's reason: no field weights are
+        stored, so the only way to name one is to reproduce it from a config.
+        The architecture and seed match this head's, so the carried field is
+        the one a Stage 2 run at this setting would have produced.
+        """
+        from fm_fewshot.services.heads.base import make_head
+
+        if self._init_from not in ("fm_standard", "fm_rolled"):
+            raise ValueError(
+                f"init_from must name a Stage 2 head, got {self._init_from!r}; "
+                "only fm_standard and fm_rolled have a field to carry over"
+            )
+        source = make_head(
+            ExperimentConfig(
+                run_name="stage2-init",
+                dataset="",
+                encoder="",
+                head=self._init_from,
+                head_params={
+                    "sample_steps": self._sample_steps,
+                    "n_train_steps": (
+                        self._n_train_steps if self._stage2_train_steps is None
+                        else self._stage2_train_steps
+                    ),
+                    "batch_size": self._batch_size,
+                    "lr": self._lr,
+                    "hidden_dims": list(self._hidden_dims),
+                    "time_conditioning": self._time_conditioning,
+                    "eval_every": 0,
+                },
+                init_seed=self._init_seed,
+            ),
+            self._n_classes,
+        )
+        source.fit(train_x, train_y, val_x, val_y)
+        return {k: v.detach().clone() for k, v in source.field.state_dict().items()}
 
 
 def _probe_kwargs(probe_params: object) -> dict[str, object]:

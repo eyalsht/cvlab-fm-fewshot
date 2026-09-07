@@ -41,18 +41,23 @@ velocities the penalty needs are collected by recording what the solver asks
 for, not by writing a second rollout that could drift from the first.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 import torch.nn.functional as F  # noqa: N812
 from torch import Tensor
 
+from fm_fewshot.services.flow.objective import cfm_loss
 from fm_fewshot.services.flow.solver import VelocityField
 from fm_fewshot.services.flow.training.base import (
     StepObserver,
     ValidationSelector,
     train_field,
     transport,
+)
+from fm_fewshot.services.flow.training.classifier_guided import (
+    GuidedTargetConfig,
+    guided_target,
 )
 from fm_fewshot.services.flow.velocity_mlp import VelocityMLP
 
@@ -79,6 +84,12 @@ class RolledOutCeConfig:
     joint_classifier: bool = False
     classifier_lr: float | None = None
     unfreeze_at: int = 0
+    # The hybrid, ours and not his (stage3_alignment 3.3). mu = 0 is the graded
+    # row and the reason every Strategy 1 fit is bit-identical to the one that
+    # produced results/: at zero the term is not merely weighted out, it is not
+    # computed and it draws no randomness.
+    mu: float = 0.0
+    coupling: GuidedTargetConfig = field(default_factory=GuidedTargetConfig)
 
     def __post_init__(self) -> None:
         # The projector is built once from W. A W that moves makes it stale
@@ -183,8 +194,11 @@ def rolled_out_ce_loss(
     lambda_disp: float = 0.0,
     lambda_vel: float = 0.0,
     freeze_classifier: bool = True,
+    mu: float = 0.0,
+    coupling: GuidedTargetConfig | None = None,
+    generator: torch.Generator | None = None,
 ) -> Tensor:
-    """L_cls for one batch, with the two optional penalties.
+    """L_cls for one batch, with the two optional penalties and the hybrid term.
 
     `weight` and `bias` are detached here as well as frozen by the head, so a
     caller that hands over tensors still attached to a graph cannot train the
@@ -203,6 +217,23 @@ def rolled_out_ce_loss(
     if lambda_vel:
         velocity = torch.stack([(v**2).sum(dim=1) for v in recorder.velocities])
         loss = loss + lambda_vel * velocity.sum(dim=0).mean()
+    if mu:
+        # Strategy 2's coupling, supervising the whole path, added to Strategy
+        # 1's decision at the endpoint. Computed per batch, so a cached
+        # recompute cadence would be quietly ignored rather than honoured.
+        config = (coupling or GuidedTargetConfig()).validate()
+        if config.target_every != 1:
+            raise ValueError(
+                f"the hybrid computes its coupling per batch, so target_every must be 1, "
+                f"got {config.target_every}; a cached cadence cannot be honoured here"
+            )
+        if generator is None:
+            raise ValueError("the hybrid term samples t and needs a generator")
+        target = guided_target(
+            field, x0, y, weight, bias, sample_steps=sample_steps, config=config
+        )
+        t = torch.rand(x0.shape[0], generator=generator)
+        loss = loss + mu * cfm_loss(field, x0, target, t)
     return loss
 
 
@@ -222,10 +253,13 @@ def train_rolled_out_ce_field(
     lambda_disp: float = 0.0,
     lambda_vel: float = 0.0,
     project_velocity: bool = False,
+    mu: float = 0.0,
+    coupling: GuidedTargetConfig | None = None,
     joint: "JointClassifier | None" = None,
     classifier_lr: float | None = None,
     init_seed: int = 0,
     zero_output_init: bool = True,
+    init_state: dict[str, Tensor] | None = None,
     on_step: StepObserver | None = None,
 ) -> tuple[VelocityMLP, list[float]]:
     """Fit v_theta by rolling the solver out and scoring the probe's decision.
@@ -246,8 +280,10 @@ def train_rolled_out_ce_field(
     def batch_loss(
         field: VelocityMLP, batch_x0: Tensor, batch_y: Tensor, generator: torch.Generator
     ) -> Tensor:
-        # generator unused: this objective has no random time (ADR-021 carries
-        # over; the rollout is the whole path and nothing is sampled along it).
+        # The generator is unused at mu = 0: the rolled-out objective has no
+        # random time (ADR-021 carries over, the rollout is the whole path and
+        # nothing is sampled along it). The hybrid term does draw t, which is
+        # why it is passed on and why a mu = 0 fit stays bit-identical.
         return rolled_out_ce_loss(
             field,
             batch_x0,
@@ -278,6 +314,7 @@ def train_rolled_out_ce_field(
         init_seed=init_seed,
         zero_output_init=zero_output_init,
         output_projector=projector,
+        init_state=init_state,
         extra_param_groups=extra_param_groups,
         on_before_step=None if joint is None else joint.open_at,
         on_step=on_step,

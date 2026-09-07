@@ -504,6 +504,11 @@ class TestStage3IdenticalLoopArguments:
         # the search-space difference this class exists to rule out.
         assert ce_kwargs.pop("output_projector", None) is None
         assert guided_kwargs.pop("output_projector", None) is None
+        # Carrying a Stage 2 field over is an extra on Strategy 1 only, so the
+        # keyword exists on one side. In the graded configuration neither field
+        # is carried over, which is what has to hold for the comparison.
+        assert ce_kwargs.pop("init_state", None) is None
+        assert guided_kwargs.pop("init_state", None) is None
         # Neither is the optional extension: no second parameter group, so no
         # classifier in the optimizer, and no schedule to unfreeze one (FR23).
         # Strategy 1 names both keywords because it is the strategy that can
