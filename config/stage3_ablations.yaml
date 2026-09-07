@@ -90,6 +90,42 @@ variants:
       target_steps: 1
       target_every: 1
       rho: 0.25
+  # The cap sweep continues below 0.25 because the first pass found the gain
+  # rising as the cap tightened, and rho -> 0 must return to the probe exactly
+  # (the target collapses onto z and the field onto identity), so there is an
+  # interior optimum to locate rather than a monotone trend to follow.
+  - label: guided-norm-rho0.1
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 12
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: normalized
+      eta: 1.0
+      target_steps: 1
+      target_every: 1
+      rho: 0.1
+  - label: guided-norm-rho0.15
+    head: fm_prelinear_guided
+    head_params:
+      sample_steps: 12
+      n_train_steps: 2000
+      batch_size: 64
+      lr: 1.0e-3
+      hidden_dims: [512, 512]
+      time_conditioning: scalar
+      eval_every: 50
+      zero_output_init: true
+      target_step: normalized
+      eta: 1.0
+      target_steps: 1
+      target_every: 1
+      rho: 0.15
   - label: guided-norm-rho0.5
     head: fm_prelinear_guided
     head_params:
