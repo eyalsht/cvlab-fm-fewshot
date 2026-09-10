@@ -302,7 +302,7 @@ def make_stage3_figures(
     settings = _settings(spec)
     feature_t = settings["feature_t"]
     dpi = int(spec["dpi"])
-    projection, viz_seed = spec["projection"], int(spec["viz_seed"])
+    kinds, viz_seed = figures.projection_kinds(spec), int(spec["viz_seed"])
 
     cells = load_stage3_cells(results_dir, t_values=settings["t_values"])
     # Everything is resolved and checked before a single file is written.
@@ -356,28 +356,37 @@ def make_stage3_figures(
         rows, labels = figures.viz_test_rows(
             plan.test_y, plan.viz_ids, int(spec["max_per_class"])
         )
-        projector = figures.make_projector(projection, viz_seed)
-        panels = three_way_panels(
-            plan.test_x, rows, labels,
-            tuple((f"after {name}", head) for name, head in zip(names, heads, strict=True)),
-            projector,
-        )
-        # Either head's probe: both are the Stage 1 probe refitted on the same
-        # subset at the same init_seed, and ADR-031 makes them bit-identical.
-        reduced = figures.reduced_probe(projector, heads[0].probe.weight, heads[0].probe.bias)
-        written.append(
-            figures.plot_feature_panels(
-                panels=panels.panels,
-                labels=panels.labels,
-                prototypes=None,
-                boundary=None if reduced is None else (*reduced, plan.viz_ids),
-                class_names=plan.viz_classes,
-                colors=plan.colors,
-                title=f"{stem}, K={k_tag} ({projection.upper()}, one joint fit)",
-                out=out_dir / f"stage3_features_{encoder}.png",
-                dpi=dpi,
+        # "PCA or t-SNE may be used": one figure per projection, PCA keeping the
+        # bare filename. No unit-sphere twin here, unlike S3. Stage 2 classifies
+        # by cosine, so normalizing shows the geometry the rule reads; the frozen
+        # probe is affine and its logits move with scale, so a normalized panel
+        # would draw a decision this classifier never makes.
+        for kind in kinds:
+            projector = figures.make_projector(kind, viz_seed)
+            panels = three_way_panels(
+                plan.test_x, rows, labels,
+                tuple((f"after {name}", head) for name, head in zip(names, heads, strict=True)),
+                projector,
             )
-        )
+            # Either head's probe: both are the Stage 1 probe refitted on the same
+            # subset at the same init_seed, which makes them bit-identical.
+            reduced = figures.reduced_probe(
+                projector, heads[0].probe.weight, heads[0].probe.bias
+            )
+            written.append(
+                figures.plot_feature_panels(
+                    panels=panels.panels,
+                    labels=panels.labels,
+                    prototypes=None,
+                    boundary=None if reduced is None else (*reduced, plan.viz_ids),
+                    class_names=plan.viz_classes,
+                    colors=plan.colors,
+                    note=figures.variance_note(projector, kind),
+                    title=f"{stem}, K={k_tag} ({kind.upper()}, one joint fit)",
+                    out=out_dir / f"stage3_features_{encoder}{figures.projection_suffix(kind)}.png",
+                    dpi=dpi,
+                )
+            )
 
         # P4, where the displacement went, from what the rowspace command stored.
         written.append(

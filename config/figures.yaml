@@ -8,9 +8,12 @@
 # list here pins the colors too, and Stage 2 and Stage 3 read the same list so a
 # class keeps its color across all three stages.
 
-projection: pca        # pca or tsne; PCA is a linear map both encoders' points
-                       # pass through identically, which is the safer default
-                       # when the figure's job is to compare encoders
+# Both write-ups say "PCA or t-SNE may be used", so both are drawn rather than
+# one chosen. PCA is a linear map every point passes through identically and the
+# only one with a preimage, which is what lets P3 overlay the frozen probe's
+# decision regions; t-SNE separates structure two linear axes cannot hold. The
+# PCA figures keep the bare filename, t-SNE ones take a _tsne suffix.
+projections: [pca, tsne]
 viz_seed: 0
 max_per_class: 60
 dpi: 200

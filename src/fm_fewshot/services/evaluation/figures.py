@@ -46,6 +46,112 @@ class MissingRunError(RuntimeError):
     """Raised when a figure needs a cell that no run produced."""
 
 
+# F1, S1 and P1 take their line styling from here rather than from matplotlib's
+# default cycle. The rule is his, from the Stage 2 meeting: the two step counts
+# of one scheme are a couple and have to read as one, so they share a hue and
+# are separated by the line style. Alphabetical order through the default cycle
+# gave a pair two unrelated colors and interleaved the pairs.
+SERIES_PALETTE = ("#4e79a7", "#f28e2b", "#59a14f", "#b07aa1", "#e15759")
+BASELINE_COLOR = "#333333"
+# Indexed by the step count's rank inside its scheme, so the shorter solve is
+# dotted and the longer one solid. A scheme with a single T stays solid; a
+# lone dotted line would suggest a partner that is not on the panel.
+T_LINESTYLES = (":", "-", "-.", (0, (3, 1, 1, 1)))
+
+
+def split_scheme(label: str) -> tuple[str, int | None]:
+    """Scheme name and step count, from either stage's series label.
+
+    Stage 2 labels a line `fm_standard T=4` (`scheme_label`) and Stage 3
+    `fm_prelinear_ce@T4` (`report.method_label`). One parser for both, so the
+    pairing cannot hold in one family and quietly fail in the other.
+    """
+    for separator in ("@T", " T="):
+        scheme, found, steps = label.partition(separator)
+        if found and steps.isdigit():
+            return scheme, int(steps)
+    return label, None
+
+
+def series_order(labels, baseline: str | None = None) -> list[str]:
+    """Baseline first, then each scheme with its step counts ascending.
+
+    The legend is the panel's key, so it reads in the order the reader compares
+    in: the row being measured against, then a scheme's couple together.
+    """
+    def key(label: str) -> tuple[int, str, int]:
+        scheme, steps = split_scheme(label)
+        return (0 if label == baseline else 1, scheme, -1 if steps is None else steps)
+
+    return sorted(labels, key=key)
+
+
+def series_styles(labels, *, baseline: str | None = None) -> dict[str, dict]:
+    """One hue per scheme; inside it, the step counts differ only by line style."""
+    labels = list(labels)
+    steps: dict[str, list[int]] = {}
+    for label in labels:
+        if label == baseline:
+            continue
+        scheme, count = split_scheme(label)
+        entry = steps.setdefault(scheme, [])
+        if count is not None and count not in entry:
+            entry.append(count)
+    for entry in steps.values():
+        entry.sort()
+    hues = {
+        scheme: SERIES_PALETTE[i % len(SERIES_PALETTE)] for i, scheme in enumerate(steps)
+    }
+
+    styles: dict[str, dict] = {}
+    for label in labels:
+        if label == baseline:
+            styles[label] = {
+                "color": BASELINE_COLOR, "linestyle": "--", "marker": "s", "linewidth": 1.7,
+            }
+            continue
+        scheme, count = split_scheme(label)
+        paired = len(steps[scheme]) > 1
+        rank = steps[scheme].index(count) if paired else 1
+        styles[label] = {
+            "color": hues[scheme],
+            "linestyle": T_LINESTYLES[rank % len(T_LINESTYLES)] if paired else "-",
+            "marker": "o",
+            "linewidth": 1.6,
+        }
+    return styles
+
+
+def draw_caption(fig, caption: str) -> None:  # noqa: ANN001
+    """Put a caption under the axes and reserve the room it needs.
+
+    `tight_layout` lays out the axes without knowing a `fig.text` exists, so
+    a caption at the bottom, and a two-line one in particular, ends up under
+    the x label. The reserve is per line and generous by a hair.
+    """
+    lines = caption.count(chr(10)) + 1
+    fig.tight_layout(rect=(0.0, 0.035 * lines + 0.015, 1.0, 1.0))
+    fig.text(0.5, 0.005, caption, ha="center", va="bottom", fontsize=6)
+
+
+def pairing_note(styles: dict[str, dict]) -> str:
+    """The one line that tells the reader how to read a couple, or nothing.
+
+    Kept short deliberately. It is drawn at 6pt across a 5 inch figure, and a
+    sentence long enough to explain itself is a sentence wide enough to be
+    clipped at both ends.
+    """
+    dotted = {split_scheme(label)[1] for label, style in styles.items()
+              if style["linestyle"] == T_LINESTYLES[0]}
+    solid = {split_scheme(label)[1] for label, style in styles.items()
+             if style["linestyle"] == "-" and split_scheme(label)[1] is not None}
+    if not dotted:
+        return ""
+    shorter = ", ".join(f"T={value}" for value in sorted(dotted))
+    longer = ", ".join(f"T={value}" for value in sorted(solid))
+    return f"one colour per scheme; {shorter} dotted, {longer} solid"
+
+
 def k_label(k: int | None) -> str:
     return "full" if k is None else str(k)
 
@@ -132,22 +238,40 @@ def top_confusions(
     return sorted(pairs, key=lambda p: -p[2])[:limit]
 
 
-def plot_size_curve(cells, dataset: str, encoder: str, out: Path, *, dpi: int = 200) -> Path:
+def plot_size_curve(
+    cells, dataset: str, encoder: str, out: Path, *, dpi: int = 200,
+    baseline: str | None = None,
+) -> Path:
+    """F1 and S1. `baseline`, when given, is drawn as the row being measured against.
+
+    The line ordering and colors come from `series_order` and `series_styles`,
+    not from `sorted()` through matplotlib's default cycle. Alphabetically,
+    `fm_rolled T=12` and `fm_rolled T=4` are adjacent but were given unrelated
+    hues, and the two schemes interleaved; his Stage 2 note asked for the
+    couples to be visible as couples.
+    """
     series = size_curve_series(cells, dataset, encoder)
+    order = series_order(series, baseline)
+    styles = series_styles(order, baseline=baseline)
     fig, ax = plt.subplots(figsize=(5.2, 3.6), dpi=dpi)
     positions = range(len(K_ORDER))
-    for head, entry in sorted(series.items()):
+    for head in order:
+        entry = series[head]
         xs = [K_ORDER.index(label) for label in entry["x"]]
         errs = [e if e is not None else 0.0 for e in entry["yerr"]]
-        ax.errorbar(xs, entry["y"], yerr=errs, marker="o", capsize=3, label=head)
+        ax.errorbar(xs, entry["y"], yerr=errs, capsize=3, label=head, **styles[head])
     ax.set_xticks(list(positions))
     ax.set_xticklabels(K_ORDER)
     ax.set_xlabel("training images per class (K)")
     ax.set_ylabel("top-1 accuracy, official test split")
     ax.set_title(f"{dataset} / {encoder}")
     ax.grid(alpha=0.3)
-    ax.legend()
-    fig.tight_layout()
+    ax.legend(fontsize=7)
+    note = pairing_note(styles)
+    if note:
+        draw_caption(fig, note)
+    else:
+        fig.tight_layout()
     return _save(fig, out)
 
 
@@ -300,6 +424,60 @@ def viz_test_rows(
     return torch.cat(rows), np.concatenate(labels)
 
 
+def projection_kinds(spec) -> list[str]:  # noqa: ANN001 - the parsed figure config
+    """Which projections a figure config asks for.
+
+    Both write-ups say "PCA or t-SNE may be used" and we only ever produced
+    PCA. A list rather than a swap, because the two answer different
+    questions: PCA is a linear map with a preimage, which is what lets P3 draw
+    the frozen probe's boundary in the plotted plane, and t-SNE is a neighbour
+    embedding that can separate what two linear axes cannot hold. The old
+    scalar key still parses, so an existing config keeps working.
+    """
+    value = spec.get("projections", spec.get("projection", "pca"))
+    kinds = [value] if isinstance(value, str) else [str(kind) for kind in value]
+    if not kinds:
+        raise ValueError("no projection asked for; give at least 'pca'")
+    return kinds
+
+
+def projection_suffix(kind: str) -> str:
+    """PCA keeps the bare filename every note and report already cites."""
+    return "" if kind == "pca" else f"_{kind}"
+
+
+def variance_note(projector, kind: str) -> str:  # noqa: ANN001 - an sklearn estimator
+    """How much of the feature variance the two drawn axes actually carry.
+
+    His question was why PCA helped on some cells and not others. Without this
+    number the answer is an impression about how the panel looks; with it, a
+    panel that is a blob says so on the panel.
+    """
+    ratio = getattr(projector, "explained_variance_ratio_", None)
+    if ratio is None:
+        return f"{kind} is a neighbour embedding: its axes carry no share of the variance"
+    share = float(np.sum(np.asarray(ratio)[:2]))
+    return f"the two PCA axes carry {share:.1%} of the variance of the projected sets"
+
+
+def unit_rows(x):  # noqa: ANN001, ANN201 - an array or a Tensor
+    """Rows on the unit sphere, which is where the cosine rule reads them.
+
+    The prototypes are unit norm by his own Stage 1 formula while the features
+    enter the flow raw, so a panel drawn in raw coordinates is dominated by a
+    scale gap the decision rule never sees.
+    """
+    x = np.asarray(as_array(x), dtype=np.float64)
+    norms = np.linalg.norm(x, axis=-1, keepdims=True)
+    return x / np.maximum(norms, 1e-12)
+
+
+NORMALIZED_NOTE = (
+    "every point and prototype is projected onto the unit sphere first, so the "
+    "panel shows the directions the cosine rule compares and not the raw scale"
+)
+
+
 def make_projector(kind: str, seed: int):  # noqa: ANN202 - an sklearn estimator
     """The projector both stages fit. Seeded, because the figures must repeat."""
     if kind == "pca":
@@ -393,10 +571,10 @@ def selection_note(
     """What S7 exists to say: which step the run kept, and where the loss bottomed.
 
     The two are reported together because the interesting fact about this grid
-    is that they disagree. Selection is on validation accuracy (ADR-028), and
-    in every run of the 108 the training loss is still falling at the step the
-    run keeps, so a reader who assumes the kept step is the loss minimum is
-    reading the opposite of what happened.
+    is that they disagree. Selection is on validation accuracy, and in every run
+    of the 108 the training loss is still falling at the step the run keeps, so
+    a reader who assumes the kept step is the loss minimum is reading the
+    opposite of what happened.
     """
     if not validation or selected_step is None:
         return "no selection grid recorded; the field is the one the last step left"
@@ -412,9 +590,20 @@ def selection_note(
     return f"{kept}; loss minimum at step {loss_min_step}"
 
 
+# Why the x axis counts steps and not epochs, which he asked at the Stage 2
+# meeting: the step budget is one number for the whole grid, while an epoch is a
+# different amount of optimizer work in every cell, so epochs would not hold the
+# two schemes and the three K values to the same budget.
+EPOCH_NOTE = (
+    "the unit is the optimizer step, not the epoch: the step budget is fixed and "
+    "identical in every cell, while at batch 64 one epoch is about 7 batches at "
+    "K=10 on DTD and about 52 at K=full on Aircraft, so an epoch is a different "
+    "amount of work in every cell and would not compare across the grid"
+)
+
 SELECTION_CAPTION = (
-    "selection is on validation top-1, not on the loss (ADR-028); the dashed "
-    "rule is the step the run kept"
+    "selection is on validation top-1, not on the loss; the dashed rule is the "
+    f"step the run kept. {EPOCH_NOTE}"
 )
 
 
@@ -507,7 +696,7 @@ def _draw_prototypes(ax, prototypes, class_names, colors, *, label: bool) -> Non
 
 def plot_feature_panels(
     *, panels, labels, class_names, colors, title: str, out: Path,
-    prototypes=None, boundary=None, dpi: int = 200,
+    prototypes=None, boundary=None, note: str = "", dpi: int = 200,
 ) -> Path:
     """S3 and P3. The original features and the same test examples after each scheme.
 
@@ -546,12 +735,11 @@ def plot_feature_panels(
         ax.set_yticks([])
     axes[0].legend(fontsize=6, loc="best", framealpha=0.85, ncol=2)
     fig.suptitle(title, fontsize=10)
-    fig.text(0.5, 0.005, _feature_caption(prototypes, boundary), ha="center", fontsize=6)
-    fig.tight_layout()
+    draw_caption(fig, _feature_caption(prototypes, boundary, note))
     return _save(fig, out)
 
 
-def _feature_caption(prototypes, boundary) -> str:  # noqa: ANN001
+def _feature_caption(prototypes, boundary, note: str = "") -> str:  # noqa: ANN001
     text = "qualitative; one projection fitted jointly over all panels"
     if prototypes is not None:
         text += " and the prototypes"
@@ -563,7 +751,7 @@ def _feature_caption(prototypes, boundary) -> str:  # noqa: ANN001
             "; the shading is the frozen probe's decision regions in the plotted "
             "plane, unshaded where the winner is a class this panel does not draw"
         )
-    return text
+    return text if not note else chr(10).join([text, note])
 
 
 def _panel_extent(panels) -> tuple[float, float, float, float]:  # noqa: ANN001
@@ -604,7 +792,8 @@ def _draw_decision_regions(ax, boundary, class_names, colors, extent) -> None:  
 
 
 def plot_trajectory_panels(
-    *, panels, labels, prototypes, class_names, colors, title: str, out: Path, dpi: int = 200
+    *, panels, labels, prototypes, class_names, colors, title: str, out: Path,
+    note: str = "", dpi: int = 200,
 ) -> Path:
     """S4. Every Euler state of a few test examples, in the class colors."""
     fig, axes = _panel_grid(len(panels), dpi)
@@ -623,13 +812,11 @@ def plot_trajectory_panels(
         ax.set_yticks([])
     axes[0].legend(fontsize=6, loc="best", framealpha=0.85, ncol=2)
     fig.suptitle(title, fontsize=10)
-    fig.text(
-        0.5, 0.005,
+    caption = (
         "qualitative; circles are the original features, crosses the transported "
-        "features, stars the class prototypes",
-        ha="center", fontsize=6,
+        "features, stars the class prototypes"
     )
-    fig.tight_layout()
+    draw_caption(fig, caption if not note else chr(10).join([caption, note]))
     return _save(fig, out)
 
 
@@ -709,8 +896,9 @@ STAGE3_HEADS = ("fm_prelinear_ce", "fm_prelinear_guided")
 
 STAGE3_CURVES_CAPTION = (
     "the two training losses are a cross-entropy and a velocity residual; their "
-    "values are not comparable, so the columns share no y axis. Selection is on "
-    "validation top-1 (ADR-028) and the dashed rule is the step the run kept"
+    "values are not comparable, so the columns share no y axis. The kept "
+    "checkpoint is the best validation top-1 and the dashed rule is its step. "
+    + EPOCH_NOTE
 )
 
 DISPLACEMENT_CAPTION = (
@@ -802,17 +990,13 @@ def plot_stage3_size_curve(
             xytext=(0, -9), textcoords="offset points",
             ha="center", fontsize=6, color="#4a5a68",
         )
-    for index, line in enumerate(lines):
+    styles = series_styles(lines, baseline=baseline)
+    for line in lines:
         entry = series[line]
         xs = [K_ORDER.index(label) for label in entry["x"]]
         errs = [0.0 if e is None else e for e in entry["yerr"]]
-        is_baseline = line == baseline
         ax.errorbar(
-            xs, entry["y"], yerr=errs, capsize=3, label=line, zorder=3,
-            marker="s" if is_baseline else "o",
-            linestyle="--" if is_baseline else "-",
-            linewidth=1.7 if is_baseline else 1.1,
-            color="#333333" if is_baseline else PALETTE[(index - 1) % len(PALETTE)],
+            xs, entry["y"], yerr=errs, capsize=3, label=line, zorder=3, **styles[line]
         )
     ax.set_xticks(list(range(len(K_ORDER))))
     ax.set_xticklabels(K_ORDER)
@@ -821,13 +1005,13 @@ def plot_stage3_size_curve(
     ax.set_title(f"{dataset} / {encoder}")
     ax.grid(alpha=0.3)
     ax.legend(fontsize=7)
-    fig.text(
-        0.5, 0.005,
-        f"the dashed line is {baseline}, the row Stage 3 is measured against "
-        "(ADR-035), not the image prototypes Stage 1 and Stage 2 report on",
-        ha="center", fontsize=6,
-    )
-    fig.tight_layout()
+    # Two short lines rather than one long one: his write-up makes the probe the
+    # direct baseline, and the reader needs to know it is the black dashed line.
+    caption = f"the dashed black line is {baseline}, the direct baseline his write-up names"
+    note = pairing_note(styles)
+    if note:
+        caption = '\n'.join([caption, note])
+    draw_caption(fig, caption)
     return _save(fig, out)
 
 
@@ -962,6 +1146,9 @@ __all__ = [
     "plot_feature_panels",
     "plot_feature_space",
     "plot_loss_curves",
+    "NORMALIZED_NOTE",
+    "draw_caption",
+    "pairing_note",
     "plot_size_curve",
     "plot_selection",
     "plot_stage2_loss_curves",
@@ -975,7 +1162,14 @@ __all__ = [
     "reduced_probe",
     "require_cells",
     "scheme_label",
+    "projection_kinds",
+    "projection_suffix",
+    "series_order",
+    "series_styles",
     "size_curve_series",
+    "split_scheme",
+    "unit_rows",
+    "variance_note",
     "stability_note",
     "stage3_baseline",
     "stage3_lines",

@@ -239,14 +239,24 @@ def _project_blocks(blocks, prototypes, projector):  # noqa: ANN202 - arrays and
     return figures.project_blocks(blocks, projector, extra=prototypes)
 
 
-def three_way_panels(test_x, rows, labels, schemes, prototypes, projector) -> ProjectedPanels:
-    """S3. The original test features and the same rows after each scheme."""
+def three_way_panels(
+    test_x, rows, labels, schemes, prototypes, projector, *, normalize: bool = False
+) -> ProjectedPanels:
+    """S3. The original test features and the same rows after each scheme.
+
+    `normalize` puts every block and the prototypes on the unit sphere before
+    the joint fit. The prototypes are already there by his Stage 1 formula, so
+    what moves is the features, out of a raw scale the cosine rule never sees.
+    """
     original = test_x[rows]
     names = ["original features"]
     blocks = [_as_array(original)]
     for name, head in schemes:
         names.append(name)
         blocks.append(_as_array(head.transport(original)))
+    if normalize:
+        blocks = [figures.unit_rows(block) for block in blocks]
+        prototypes = figures.unit_rows(prototypes)
     projected, protos = _project_blocks(blocks, prototypes, projector)
     return ProjectedPanels(
         panels=tuple(zip(names, projected, strict=True)),
@@ -256,7 +266,9 @@ def three_way_panels(test_x, rows, labels, schemes, prototypes, projector) -> Pr
     )
 
 
-def trajectory_panels(test_x, rows, labels, schemes, prototypes, projector) -> ProjectedPanels:
+def trajectory_panels(
+    test_x, rows, labels, schemes, prototypes, projector, *, normalize: bool = False
+) -> ProjectedPanels:
     """S4. Every Euler state of the same rows, one panel per scheme.
 
     Each head integrates at its own T, so the T=4 and T=12 panels hold
@@ -268,6 +280,13 @@ def trajectory_panels(test_x, rows, labels, schemes, prototypes, projector) -> P
     for name, head in schemes:
         names.append(name)
         blocks.append(_as_array(head.trajectory(original)))
+    if normalize:
+        # Every Euler state onto the sphere, so the path is the direction
+        # turning rather than the norm shrinking. The plotted states no longer
+        # satisfy the Euler recurrence in these coordinates, which is the price
+        # of the view and is stated on the panel.
+        blocks = [figures.unit_rows(block) for block in blocks]
+        prototypes = figures.unit_rows(prototypes)
     projected, protos = _project_blocks(blocks, prototypes, projector)
     return ProjectedPanels(
         panels=tuple(zip(names, projected, strict=True)),
@@ -385,7 +404,7 @@ def make_stage2_figures(
     representative_k = stage2["representative_k"]
     representative_k = None if representative_k == "full" else int(representative_k)
     dpi = int(spec["dpi"])
-    projection, viz_seed = spec["projection"], int(spec["viz_seed"])
+    kinds, viz_seed = figures.projection_kinds(spec), int(spec["viz_seed"])
 
     cells = load_stage2_cells(results_dir, t_values=t_values)
     # Everything is resolved and checked before a single file is written.
@@ -409,6 +428,7 @@ def make_stage2_figures(
             figures.plot_size_curve(
                 cells, plan.dataset, encoder,
                 out_dir / f"stage2_size_curve_{encoder}.png", dpi=dpi,
+                baseline="prototype",
             )
         )
         written.append(
@@ -452,25 +472,42 @@ def make_stage2_figures(
         rows, labels = figures.viz_test_rows(
             plan.test_y, plan.viz_ids, int(spec["max_per_class"])
         )
-        panels = three_way_panels(
-            plan.test_x, rows, labels,
-            ((f"after fm_standard, T={feature_t}", standard),
-             (f"after fm_rolled, T={feature_t}", rolled)),
-            standard.prototypes[plan.viz_ids],
-            figures.make_projector(projection, viz_seed),
+        schemes = (
+            (f"after fm_standard, T={feature_t}", standard),
+            (f"after fm_rolled, T={feature_t}", rolled),
         )
-        written.append(
-            figures.plot_feature_panels(
-                panels=panels.panels,
-                labels=panels.labels,
-                prototypes=panels.prototypes,
-                class_names=plan.viz_classes,
-                colors=plan.colors,
-                title=f"{stem}, K={k_tag} ({projection.upper()}, one joint fit)",
-                out=out_dir / f"stage2_features_{encoder}.png",
-                dpi=dpi,
-            )
-        )
+        protos = standard.prototypes[plan.viz_ids]
+        # Once per projection his write-up allows ("PCA or t-SNE may be used"),
+        # and each of those once more on the unit sphere. PCA unnormalized keeps
+        # the bare filename, which is the one the reports already cite.
+        for kind in kinds:
+            for normalized in (False, True):
+                projector = figures.make_projector(kind, viz_seed)
+                panels = three_way_panels(
+                    plan.test_x, rows, labels, schemes, protos, projector,
+                    normalize=normalized,
+                )
+                note = figures.variance_note(projector, kind)
+                scale = ""
+                if normalized:
+                    note = "\n".join([note, figures.NORMALIZED_NOTE])
+                    scale = ", unit sphere"
+                tag = figures.projection_suffix(kind)
+                if normalized:
+                    tag += "_normalized"
+                written.append(
+                    figures.plot_feature_panels(
+                        panels=panels.panels,
+                        labels=panels.labels,
+                        prototypes=panels.prototypes,
+                        class_names=plan.viz_classes,
+                        colors=plan.colors,
+                        note=note,
+                        title=f"{stem}, K={k_tag} ({kind.upper()}, one joint fit{scale})",
+                        out=out_dir / f"stage2_features_{encoder}{tag}.png",
+                        dpi=dpi,
+                    )
+                )
 
         # S4, trajectories: one figure per scheme, then the T contrast.
         n_classes = int(stage2["trajectory_classes"])
@@ -480,46 +517,67 @@ def make_stage2_figures(
             plan.test_y, traj_ids, int(stage2["trajectory_per_class"])
         )
 
-        def _trajectories(schemes, out_name, title, plan=plan, ids=traj_ids,
-                          names=traj_names, rows=traj_rows, labels=traj_labels):
+        # S4 stays on the first projection: his item 4 recommends PCA here
+        # because a projected trajectory is only geometrically readable under a
+        # linear map. The unit-sphere twin is drawn beside each one.
+        traj_kind = kinds[0]
+
+        def _trajectories(schemes, out_name, title, *, normalized=False, plan=plan,
+                          ids=traj_ids, names=traj_names, rows=traj_rows,
+                          labels=traj_labels, kind=traj_kind):
+            projector = figures.make_projector(kind, viz_seed)
             drawn = trajectory_panels(
                 plan.test_x, rows, labels, schemes,
-                schemes[0][1].prototypes[ids],
-                figures.make_projector(projection, viz_seed),
+                schemes[0][1].prototypes[ids], projector, normalize=normalized,
             )
+            note = figures.variance_note(projector, kind)
+            if normalized:
+                note = "\n".join([
+                    note,
+                    figures.NORMALIZED_NOTE,
+                    "the drawn states no longer satisfy the Euler recurrence, which "
+                    "the raw panel of the same run does",
+                ])
+                head, dot, extension = out_name.rpartition(".")
+                out_name = f"{head}_normalized{dot}{extension}"
             return figures.plot_trajectory_panels(
                 panels=drawn.panels,
                 labels=drawn.labels,
                 prototypes=drawn.prototypes,
                 class_names=names,
                 colors=plan.colors,
-                title=title,
+                title=title + (", unit sphere" if normalized else ""),
+                note=note,
                 out=Path(assets_dir) / plan.dataset / out_name,
                 dpi=dpi,
             )
 
         for head, fitted in (("fm_standard", standard), ("fm_rolled", rolled)):
             label = figures.scheme_label(head, feature_t)
-            written.append(
-                _trajectories(
-                    ((label, fitted),),
-                    f"stage2_trajectories_{encoder}_{head}_T{feature_t}.png",
-                    f"{stem}, K={k_tag}, {label}",
+            for normalized in (False, True):
+                written.append(
+                    _trajectories(
+                        ((label, fitted),),
+                        f"stage2_trajectories_{encoder}_{head}_T{feature_t}.png",
+                        f"{stem}, K={k_tag}, {label}",
+                        normalized=normalized,
+                    )
                 )
-            )
 
         contrast = tuple(
             (figures.scheme_label("fm_standard", t), head_of(plan.runs[("fm_standard", t)]))
             for t in t_values
         )
         tags = "_vs_".join(f"T{t}" for t in t_values)
-        written.append(
-            _trajectories(
-                contrast,
-                f"stage2_trajectories_{encoder}_fm_standard_{tags}.png",
-                f"{stem}, K={k_tag}, fm_standard, {tags.replace('_vs_', ' against ')}",
+        for normalized in (False, True):
+            written.append(
+                _trajectories(
+                    contrast,
+                    f"stage2_trajectories_{encoder}_fm_standard_{tags}.png",
+                    f"{stem}, K={k_tag}, fm_standard, {tags.replace('_vs_', ' against ')}",
+                    normalized=normalized,
+                )
             )
-        )
 
     return written
 
