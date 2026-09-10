@@ -71,6 +71,12 @@ FM_PARAMS: dict[str, object] = {
 }
 EVAL_EVERY = 2
 N_TRAIN_STEPS = 4
+# The probe's own selection record. The kept epoch is deliberately not the last
+# one and not the best one, so a reference drawn from the argmax or from the
+# final row would show a different number and the test would catch it.
+PROBE_EPOCHS = ((1, 0.41), (2, 0.55), (3, 0.62))
+PROBE_KEPT_EPOCH = 2
+PROBE_KEPT_VAL = 0.55
 # The step the run kept, placed so it is neither the loss minimum nor the
 # validation argmax of the stored curve. A figure that recomputed either would
 # mark a different step and the test would see it.
@@ -165,6 +171,8 @@ def _write_run(results_dir: Path, cfg: ExperimentConfig, top1: float) -> Path:
     payload = {"run_id": cfg.run_name, "config": asdict(cfg), "test_top1": top1}
     if cfg.head.startswith("fm_"):
         payload["best_epoch"] = SELECTED_STEP
+    if cfg.head == "linear_probe":
+        payload["best_epoch"] = PROBE_KEPT_EPOCH
     (run_dir / "summary.json").write_text(
         json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
     )
@@ -172,6 +180,15 @@ def _write_run(results_dir: Path, cfg: ExperimentConfig, top1: float) -> Path:
         (run_dir / "loss_curve.csv").write_text(
             "\n".join(_loss_curve_rows()) + "\n", encoding="utf-8"
         )
+    if cfg.head == "linear_probe":
+        # The epoch record the evaluation loop writes for a probe run. P2 draws
+        # its kept row as the identity start of every Stage 3 curve.
+        rows = ["epoch,train_loss,val_loss,val_accuracy"]
+        rows += [
+            f"{epoch},{1.0 / epoch},{2.0 / epoch},{value}"
+            for epoch, value in PROBE_EPOCHS
+        ]
+        (run_dir / "epochs.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
     return run_dir
 
 
@@ -639,6 +656,71 @@ class TestTrainingCurves:
         )
         assert seen, "plot_selection drew nothing"
         assert not any(call.get("sharey") for call in seen)
+
+    def test_draws_the_probe_as_the_reference_every_curve_starts_from(
+        self, tree: Path, spec_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The block is initialized to exact identity, so at step 0 the system is
+        the probe. Without the rule, whether a curve improved on the probe or
+        degraded from it needs a second figure to answer."""
+        drawn = self._drawn(tree, spec_path, monkeypatch)
+        assert drawn["reference"]["value"] == pytest.approx(PROBE_KEPT_VAL)
+        assert "probe" in drawn["reference"]["label"]
+
+    def test_the_reference_is_the_probe_epoch_summary_json_kept(
+        self, tree: Path
+    ) -> None:
+        """Not the argmax and not the last epoch, both of which sit elsewhere in
+        the fixture's record, for the reason the kept step is read that way."""
+        assert max(v for _, v in PROBE_EPOCHS) != PROBE_KEPT_VAL
+        assert PROBE_EPOCHS[-1][0] != PROBE_KEPT_EPOCH
+        run_dir = tree / "results" / f"linear_probe-{_k_tag(REPRESENTATIVE_K)}-0"
+        assert figures.read_probe_validation(run_dir) == pytest.approx(PROBE_KEPT_VAL)
+
+    def test_a_probe_run_without_an_epoch_record_refuses(
+        self, tree: Path, spec_path: Path
+    ) -> None:
+        """Silently dropping the rule would leave a panel that looks complete and
+        answers the stage's question wrongly."""
+        for run in (tree / "results").glob("linear_probe-*"):
+            (run / "epochs.csv").unlink()
+        with pytest.raises(FileNotFoundError):
+            _generate(tree, spec_path)
+
+    def test_the_caption_clears_the_axes_it_sits_under(
+        self, tree: Path
+    ) -> None:
+        """plot_selection is a two-row figure 5.2 inches tall and its caption runs
+        to three lines. tight_layout does not know a fig.text exists, so the
+        reserve has to be checked rather than assumed."""
+        out = figures.plot_selection(
+            panels=[
+                {
+                    "name": name,
+                    "steps": [1, 2, 3, 4],
+                    "losses": [1e3, 1e2, 1e1, 1e0],
+                    "validation": [(2, 0.5), (4, 0.6)],
+                    "selected_step": 2,
+                }
+                for name in ("fm_prelinear_ce T=12", "fm_prelinear_guided T=12")
+            ],
+            title="t",
+            caption=figures.STAGE3_CURVES_CAPTION,
+            out=tree / "reserve.png",
+        )
+        assert out.exists()
+        fig = figures.plt.figure(figsize=(10.0, 5.2), dpi=200)
+        text = fig.text(
+            0.5, 0.005, figures.STAGE3_CURVES_CAPTION, ha="center", va="bottom",
+            fontsize=6,
+        )
+        fig.canvas.draw()
+        box = text.get_window_extent(fig.canvas.get_renderer())
+        lines = figures.STAGE3_CURVES_CAPTION.count(chr(10)) + 1
+        reserved = (0.035 * lines + 0.015) * fig.get_figheight() * fig.dpi
+        assert box.y1 <= reserved, "the caption runs into the reserved axes area"
+        assert box.width <= fig.get_figwidth() * fig.dpi, "the caption is clipped sideways"
+        figures.plt.close(fig)
 
     def test_says_on_the_figure_why_the_two_losses_are_not_one_scale(
         self, tree: Path, spec_path: Path, monkeypatch: pytest.MonkeyPatch

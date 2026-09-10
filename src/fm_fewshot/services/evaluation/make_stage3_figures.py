@@ -208,6 +208,9 @@ class _Plan:
     viz_ids: list[int]
     colors: dict[str, str]
     runs: dict[str, Path]
+    # The Stage 1 probe run for this cell. The block starts as the identity, so
+    # this run's kept validation top-1 is where every Stage 3 curve begins.
+    probe_run: Path
     test_x: torch.Tensor
     test_y: torch.Tensor
     # The K whose cell is the Main Comparison here, or None on an encoder that
@@ -271,6 +274,14 @@ def _plan(spec: dict, results_dir: Path, data_root: Path, cells: list[CellSummar
                 load_rowspace(run_dir, name=figures.scheme_label(head, settings["feature_t"]))
                 runs[head] = run_dir
 
+            # Resolved here rather than at draw time, with everything else, so a
+            # cell whose probe run is missing refuses before any file is written.
+            probe_run = find_run(
+                results_dir, dataset=dataset, encoder=encoder, head="linear_probe",
+                k=settings["k"], subset_seed=settings["subset_seed"],
+            )
+            figures.read_probe_validation(probe_run)
+
             plans.append(
                 _Plan(
                     dataset=dataset,
@@ -279,6 +290,7 @@ def _plan(spec: dict, results_dir: Path, data_root: Path, cells: list[CellSummar
                     viz_ids=[class_names.index(name) for name in viz_classes],
                     colors=colors,
                     runs=runs,
+                    probe_run=probe_run,
                     test_x=test_x,
                     test_y=test_y,
                     marked_k=(
@@ -347,6 +359,10 @@ def make_stage3_figures(
                 ],
                 title=f"{stem}, K={k_tag}",
                 caption=figures.STAGE3_CURVES_CAPTION,
+                reference={
+                    "value": figures.read_probe_validation(plan.probe_run),
+                    "label": "linear probe, the identity start",
+                },
                 out=out_dir / f"stage3_curves_{encoder}.png", dpi=dpi,
             )
         )
