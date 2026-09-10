@@ -438,7 +438,8 @@ class TestGeneration:
         assert any(name.startswith("stage2_loss_curves") for name in names)
         assert any(name.startswith("stage2_features") for name in names)
         assert any(name.startswith("stage2_selection") for name in names)
-        assert sum(name.startswith("stage2_trajectories") for name in names) == 3
+        # Three trajectory figures, each with its unit-sphere twin beside it.
+        assert sum(name.startswith("stage2_trajectories") for name in names) == 6
         assert all(path.exists() for path in written)
 
     def test_size_curve_csv_carries_every_scheme(self, tree: Path, spec_path: Path) -> None:
