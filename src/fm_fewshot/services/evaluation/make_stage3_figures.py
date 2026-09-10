@@ -13,8 +13,8 @@ Stage 2 uses rather than a second implementation of it.
 
 Two rules run through the family. The baseline is the linear probe, taken from
 the registry (ADR-035): Stage 1's F1 and Stage 2's S1 lead with the image
-prototype row and a Stage 3 panel that did would put the reader's comparison on a
-number Stage 3 is not measured on. And the displacement decomposition is read
+prototype row, and a Stage 3 panel that did so would put the reader's comparison
+on a number Stage 3 is not measured on. And the displacement decomposition is read
 from the run's stored `rowspace.json`, never recomputed here, for the reason S5
 reads `reverse.json`: the number in the phase note and the number on the figure
 have to come from one file.
