@@ -597,18 +597,19 @@ def selection_note(
 EPOCH_NOTE = (
     "the unit is the optimizer step, not the epoch: the step budget is fixed and "
     "identical in every cell, while at batch 64 one epoch is about 7 batches at "
-    "K=10 on DTD and about 52 at K=full on Aircraft, so an epoch is a different "
-    "amount of work in every cell and would not compare across the grid"
+    "K=10 on DTD and about 52 at K=full on Aircraft," + chr(10) + "so an epoch is "
+    "a different amount of work in every cell and would not compare across the grid"
 )
 
 SELECTION_CAPTION = (
     "selection is on validation top-1, not on the loss; the dashed rule is the "
-    f"step the run kept. {EPOCH_NOTE}"
+    f"step the run kept.{chr(10)}{EPOCH_NOTE}"
 )
 
 
 def plot_selection(
-    *, panels, title: str, out: Path, dpi: int = 200, caption: str = SELECTION_CAPTION
+    *, panels, title: str, out: Path, dpi: int = 200, caption: str = SELECTION_CAPTION,
+    reference: dict | None = None,
 ) -> Path:
     """S7. Two rows sharing one x axis per scheme, never a twin y axis.
 
@@ -659,6 +660,26 @@ def plot_selection(
                 0.5, 0.5, "no validation recorded (eval_every: 0)",
                 ha="center", va="center", fontsize=7, transform=bottom.transAxes,
             )
+        if reference is not None:
+            value = float(reference["value"])
+            bottom.axhline(
+                value, color="#6B4FA0", linewidth=1.0,
+                linestyle=(0, (4, 2)), zorder=1,
+            )
+            if column == 0:
+                # The rule often sits above every point, which pushes it to the
+                # top of the axes; a label placed above it there is cut by the
+                # spine. Read the settled limits and drop the label under the
+                # rule when it is close to the top.
+                low, high = bottom.get_ylim()
+                near_top = high - low > 0 and (value - low) / (high - low) > 0.8
+                bottom.annotate(
+                    f"{reference['label']} {value:.3f}",
+                    xy=(0, value), xycoords=("axes fraction", "data"),
+                    xytext=(3, -4 if near_top else 3), textcoords="offset points",
+                    va="top" if near_top else "bottom",
+                    fontsize=6, color="#6B4FA0",
+                )
         bottom.set_ylabel("validation top-1")
         bottom.set_xlabel("training step")
         bottom.grid(alpha=0.3)
@@ -675,8 +696,7 @@ def plot_selection(
             )
 
     fig.suptitle(title, fontsize=10)
-    fig.text(0.5, 0.005, caption, ha="center", fontsize=6)
-    fig.tight_layout()
+    draw_caption(fig, caption)
     return _save(fig, out)
 
 
@@ -859,6 +879,40 @@ def read_loss_curve(path: Path) -> tuple[list[int], list[float]]:
     return [int(r["step"]) for r in rows], [float(r["train_loss"]) for r in rows]
 
 
+def read_probe_validation(run_dir: Path) -> float:
+    """The linear probe's validation top-1 at the checkpoint it kept.
+
+    Stage 3 initializes its block to exact identity, so at step 0 the system is
+    this probe. Drawing the number as a rule on P2's validation row is what
+    makes "did training improve on the probe or degrade from it" readable
+    without holding two figures side by side.
+
+    The epoch comes from `summary.json` rather than from the column's argmax,
+    for the reason `read_selection` takes the kept step from there: the figure
+    and the table have to name the same checkpoint.
+    """
+    run_dir = Path(run_dir)
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
+    kept = summary.get("best_epoch")
+    with (run_dir / "epochs.csv").open(encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    if not rows:
+        raise MissingRunError(
+            f"probe run {run_dir.name} recorded no epochs, so its validation "
+            "reference cannot be drawn; nothing was written"
+        )
+    if kept is not None:
+        for row in rows:
+            if int(row["epoch"]) == int(kept):
+                return float(row["val_accuracy"])
+        raise MissingRunError(
+            f"probe run {run_dir.name} kept epoch {kept}, which is not in its "
+            "epochs.csv; the reference would name a checkpoint the run does not "
+            "have, so nothing was written"
+        )
+    return max(float(row["val_accuracy"]) for row in rows)
+
+
 def read_selection(run_dir: Path) -> dict:
     """Everything a selection figure draws for one run, straight from the run.
 
@@ -897,15 +951,16 @@ STAGE3_HEADS = ("fm_prelinear_ce", "fm_prelinear_guided")
 STAGE3_CURVES_CAPTION = (
     "the two training losses are a cross-entropy and a velocity residual; their "
     "values are not comparable, so the columns share no y axis. The kept "
-    "checkpoint is the best validation top-1 and the dashed rule is its step. "
-    + EPOCH_NOTE
+    "checkpoint is the best validation top-1 and the dashed rule is its step."
+    + chr(10) + EPOCH_NOTE
 )
 
 DISPLACEMENT_CAPTION = (
     "row(W) is the only part of the displacement the frozen probe can see, so the "
-    "null(W) fraction is capacity the loss cannot reward. fm_prelinear_guided is "
-    "confined to row(W) by construction and fm_prelinear_ce is not; both near zero, "
-    "or both large, falsifies that reading"
+    "null(W) fraction is capacity the loss cannot reward. fm_prelinear_guided builds "
+    "its target displacement inside row(W), but the fitted endpoint is not held "
+    "there," + chr(10) + "so a high null fraction is a fact about the fit rather "
+    "than a contradiction; fm_prelinear_ce is not constrained either way"
 )
 
 DISPLACEMENT_SCATTER_POINTS = 400
@@ -1120,8 +1175,7 @@ def plot_displacement(
     right.legend(fontsize=6, loc="best", framealpha=0.85)
 
     fig.suptitle(title, fontsize=10)
-    fig.text(0.5, 0.005, DISPLACEMENT_CAPTION, ha="center", fontsize=6)
-    fig.tight_layout()
+    draw_caption(fig, DISPLACEMENT_CAPTION)
     return _save(fig, out)
 
 
@@ -1158,6 +1212,7 @@ __all__ = [
     "project_jointly",
     "prototypes_for",
     "read_loss_curve",
+    "read_probe_validation",
     "read_selection",
     "reduced_probe",
     "require_cells",

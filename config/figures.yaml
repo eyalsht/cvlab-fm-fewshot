@@ -36,7 +36,11 @@ stage3:
   representative_k: 10
   representative_subset_seed: 0
   t_values: [4, 12]             # the two step counts the Stage 3 grid runs
-  feature_t: 4                  # the T at which P3 and P4 compare the two strategies
+  # His Stage 3 write-up: "Choose a single number of Euler steps T and use it
+  # throughout Stage 3". The grid runs both, the prose is written at T=12, so the
+  # panels are drawn there too. Stage 2 stays at 4: its write-up evaluates both
+  # step counts and its prose is written for the shorter solve.
+  feature_t: 12                 # the T at which P3 and P4 compare the two strategies
   # The Main Comparison's encoder per dataset, the cells he narrowed Stage 3 to
   # (ADR-029). P1 marks that cell on the panel rather than drawing it separately,
   # so the required comparison and the extended grid are one picture.
